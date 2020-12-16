@@ -1,8 +1,8 @@
 from aisoccer.game import Game
 from aisoccer.graphics.field import *
-from aisoccer.brains.DefendersAndAttackers2 import *
+from aisoccer.brains.DefendersAndAttackers import *
 
-game = Game(DefendersAndAttackers2(), BehindAndTowards())
+game = Game(DefendersAndAttackers(), BehindAndTowards())
 
 while True:
     status = game.tick()
