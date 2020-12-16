@@ -1,7 +1,7 @@
 import numpy as np
 from random import random
 
-from abstractbrain import *
+from core.abstractbrain import *
 
 
 class RandomWalk(AbstractBrain):

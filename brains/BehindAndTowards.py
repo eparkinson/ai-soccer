@@ -1,7 +1,6 @@
-import numpy as np
 from random import random
 
-from abstractbrain import *
+from core.abstractbrain import *
 
 
 class BehindAndTowards(AbstractBrain):
@@ -24,7 +23,7 @@ class BehindAndTowards(AbstractBrain):
         return result
 
     def is_behind_ball(self, player_index):
-        return self.my_players_pos[player_index][0] < self.ball_pos[0] - 20
+        return self.my_players_pos[player_index][0] < self.ball_pos[0] - 5
 
     def run_back(self, player_index):
         result = [-5, random()-0.5]

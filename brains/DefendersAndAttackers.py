@@ -1,14 +1,16 @@
 from brains.BehindAndTowards import *
 
+
 class DefendersAndAttackers(BehindAndTowards):
-    CHANNELS = [500, 250, 100]
+    CHANNELS = [150, 400]
+
     def do_move(self) -> np.array:
 
         result = []
 
         for i in range(2):
             acceleration = [0, 0]
-            channel_x = self.CHANNELS[i-2]
+            channel_x = self.CHANNELS[i]
 
             if self.my_players_pos[i][0] < channel_x:
                 acceleration[0] = 1
@@ -22,7 +24,7 @@ class DefendersAndAttackers(BehindAndTowards):
 
             result.append(acceleration)
 
-        for i in range(2,5):
+        for i in range(2, 5):
             acceleration = [0, 0]
             if self.is_behind_ball(i):
                 acceleration = self.run_towards(i)
@@ -31,4 +33,3 @@ class DefendersAndAttackers(BehindAndTowards):
             result.append(acceleration)
 
         return np.array(result)
-

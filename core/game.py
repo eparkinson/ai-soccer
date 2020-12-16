@@ -1,21 +1,12 @@
 from enum import Enum
 from random import random
 
-from physics import *
-from team import *
+from core.constants import *
+from core.team import *
 
 
 
 class Game:
-    FIELD_LENGTH = 1800
-    FIELD_HEIGHT = 600
-    BALL_RADIUS = 8
-    NUM_PLAYERS = 5
-    GAME_LENGTH = 180000
-    GOAL_WIDTH = 20
-    MAX_BALL_VELOCITY = 10
-    MAX_PLAYER_VELOCITY = 5
-
     def __init__(self, blue_brain, red_brain):
         self.score = {
             'red': 0,
@@ -23,16 +14,16 @@ class Game:
         }
 
         self.teams = [Team(blue_brain, 0), Team(red_brain, 1)]
-        self.state = PhyState(Game.FIELD_LENGTH, Game.FIELD_HEIGHT)
+        self.state = PhyState(Constants.FIELD_LENGTH, Constants.FIELD_HEIGHT)
         self.ball = None
         self.start()
 
     def start(self):
         self.state.clear()
-        self.ball = Ball(self.BALL_RADIUS, self.FIELD_LENGTH / 2, self.FIELD_HEIGHT / 2)
+        self.ball = Ball(Constants.BALL_RADIUS, Constants.FIELD_LENGTH / 2, Constants.FIELD_HEIGHT / 2)
         self.state.add_body(self.ball.body)
 
-        self.ball.body.velocity = [random()-0.5, random()-0.5]
+        self.ball.body.velocity = np.array([random()-0.5, random()-0.5])
 
         for team in self.teams:
             for player in team.players:
@@ -40,7 +31,7 @@ class Game:
             team.reset()
 
     def tick(self):
-        if self.state.ticks >= Game.GAME_LENGTH:
+        if self.state.ticks >= Constants.GAME_LENGTH:
             print("Game Over!")
             return GameResult.end
         elif self.is_red_goal():
@@ -66,26 +57,26 @@ class Game:
             return GameResult.nothing
 
     def is_red_goal(self):
-        return self.ball.body.position[0] < Game.GOAL_WIDTH + Game.BALL_RADIUS
+        return self.ball.body.position[0] < Constants.GOAL_WIDTH + Constants.BALL_RADIUS
 
     def is_blue_goal(self):
-        return self.ball.body.position[0] > (Game.FIELD_LENGTH - 1) - (Game.GOAL_WIDTH + Game.BALL_RADIUS)
+        return self.ball.body.position[0] > (Constants.FIELD_LENGTH - 1) - (Constants.GOAL_WIDTH + Constants.BALL_RADIUS)
 
     def game_time_complete(self):
-        return float(self.state.ticks) / float(Game.GAME_LENGTH)
+        return float(self.state.ticks) / float(Constants.GAME_LENGTH)
 
     def run_brains(self):
         blue_team = self.teams[0]
         red_team = self.teams[1]
 
         blue_players_pos = blue_team.position_matrix()
-        blue_players_vel = np.array([])
+        blue_players_vel = blue_team.velocity_matrix()
 
         red_players_pos = red_team.position_matrix()
-        red_players_vel = np.array([])
+        red_players_vel = red_team.velocity_matrix()
 
         ball_pos = self.ball.body.position
-        ball_vel = np.array([])
+        ball_vel = self.ball.body.velocity
 
         blue_score = self.score['blue']
         red_score = self.score['red']
@@ -114,14 +105,14 @@ class Game:
 
     def limit_velocities(self):
         ball_velocity = self.ball.body.normal_velocity()
-        if ball_velocity > Game.MAX_BALL_VELOCITY:
-            self.ball.body.velocity = np.multiply(self.ball.body.velocity, Game.MAX_BALL_VELOCITY / ball_velocity)
+        if ball_velocity > Constants.MAX_BALL_VELOCITY:
+            self.ball.body.velocity = np.multiply(self.ball.body.velocity, Constants.MAX_BALL_VELOCITY / ball_velocity)
 
         for t in self.teams:
             for p in t.players:
                 player_velocity = p.body.normal_velocity()
-                if player_velocity > Game.MAX_PLAYER_VELOCITY:
-                    p.body.velocity = np.multiply(p.body.velocity, Game.MAX_PLAYER_VELOCITY / player_velocity)
+                if player_velocity > Constants.MAX_PLAYER_VELOCITY:
+                    p.body.velocity = np.multiply(p.body.velocity, Constants.MAX_PLAYER_VELOCITY / player_velocity)
 
 class Ball:
     def __init__(self, radius, x, y):
@@ -141,15 +132,23 @@ def flip_pos(positions):
 
     if positions.ndim == 2:
         for i in range(len(positions)):
-            result[i][0] = Game.FIELD_LENGTH-1-positions[i][0]
+            result[i][0] = Constants.FIELD_LENGTH-1-positions[i][0]
     elif positions.ndim == 1:
-        result[0] = Game.FIELD_LENGTH-1-positions[0]
+        result[0] = Constants.FIELD_LENGTH-1-positions[0]
 
     return result
 
 
 def flip_vel(velocities):
-    pass
+    result = velocities.copy()
+
+    if velocities.ndim == 2:
+        for i in range(len(velocities)):
+            result[i][0] = -1 * velocities[i][0]
+    elif velocities.ndim == 1:
+        result[0] = -1 * velocities[0]
+
+    return result
 
 
 def flip_acc(accellerations):
