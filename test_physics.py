@@ -1,8 +1,8 @@
 import pyglet
 from random import random
 from random import randint
-from physics import *
-import numpy as np
+
+from aisoccer.physics import *
 
 radius = 25
 speed = 20

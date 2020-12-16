@@ -1,6 +1,6 @@
 import pyglet
-from core.team import *
-from core.game import *
+from aisoccer.team import *
+from aisoccer.game import *
 
 
 class Field(pyglet.window.Window):

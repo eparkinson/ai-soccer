@@ -1,9 +1,9 @@
 from enum import Enum
 from random import random
 
-from core.constants import *
-from core.team import *
-
+from aisoccer.constants import *
+from aisoccer.physics import *
+from aisoccer.team import *
 
 
 class Game:

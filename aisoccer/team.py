@@ -1,6 +1,7 @@
-from core.abstractbrain import *
-from core.constants import *
-from core.physics import *
+from aisoccer.abstractbrain import *
+from aisoccer.constants import *
+from aisoccer.physics import *
+
 
 class Team:
 

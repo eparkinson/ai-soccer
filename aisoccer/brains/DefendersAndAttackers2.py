@@ -1,5 +1,5 @@
-from brains.BaseBrainUtils import BaseBrainUtils
-from brains.BehindAndTowards import *
+from aisoccer.brains.BaseBrainUtils import *
+from aisoccer.brains.BehindAndTowards import *
 
 
 class DefendersAndAttackers2(BaseBrainUtils):

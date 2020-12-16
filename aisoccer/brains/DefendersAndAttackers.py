@@ -1,4 +1,4 @@
-from brains.BehindAndTowards import *
+from aisoccer.brains.BehindAndTowards import *
 
 
 class DefendersAndAttackers(BehindAndTowards):

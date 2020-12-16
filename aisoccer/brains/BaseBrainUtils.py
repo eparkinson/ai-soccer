@@ -1,6 +1,6 @@
 from abc import ABC
 
-from core.game import *
+from aisoccer.game import *
 
 
 class BaseBrainUtils(AbstractBrain, ABC):
