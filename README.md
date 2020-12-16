@@ -16,3 +16,12 @@ python test_nographics_game.py
 ```
 
 This sets up a game without any graphics - perfect for quickly pitting two brains against each other to see the score without having to watch the game visually.
+
+## Contributing
+
+See https://github.com/eparkinson/ai-soccer/blob/main/CONTRIBUTING.md
+
+## Code of Conduct
+
+See https://github.com/eparkinson/ai-soccer/blob/main/CODE_OF_CONDUCT.md
+
