@@ -7,15 +7,17 @@ from aisoccer.team import *
 
 
 class Game:
-    def __init__(self, blue_brain, red_brain):
+    def __init__(self, blue_brain, red_brain, game_length=Constants.GAME_LENGTH, quiet_mode=False):
+        self.quiet_mode = quiet_mode
+        self.game_length = game_length
+        self.teams = [Team(blue_brain, 0), Team(red_brain, 1)]
+        self.state = PhyState(Constants.FIELD_LENGTH, Constants.FIELD_HEIGHT)
+        self.ball = None
         self.score = {
             'red': 0,
             'blue': 0
         }
 
-        self.teams = [Team(blue_brain, 0), Team(red_brain, 1)]
-        self.state = PhyState(Constants.FIELD_LENGTH, Constants.FIELD_HEIGHT)
-        self.ball = None
         self.start()
 
     def start(self):
@@ -31,23 +33,26 @@ class Game:
             team.reset()
 
     def tick(self):
-        if self.state.ticks >= Constants.GAME_LENGTH:
-            print("Game Over!")
+        if self.state.ticks >= self.game_length:
+            if not self.quiet_mode:
+                print("Game Over!")
             return GameResult.end
         elif self.is_red_goal():
             self.score['red'] += 1
-            print("GOAL! Red!")
-            print('Score: Blue {0:2d} / Red {1:2d}     (at {2:3.2f}%)'
-                  .format(self.score['blue'], self.score['red'],
-                          self.game_time_complete() * 100))
+            if not self.quiet_mode:
+                print("GOAL! Red!")
+                print('Score: Blue {0:2d} / Red {1:2d}     (at {2:3.2f}%)'
+                      .format(self.score['blue'], self.score['red'],
+                              self.game_time_complete() * 100))
             self.start()
             return GameResult.goal_red
         elif self.is_blue_goal():
             self.score['blue'] += 1
-            print("GOAL! Blue!")
-            print('Score: Blue {0:2d} / Red {1:2d}     (at {2:3.2f}%)'
-                  .format(self.score['blue'], self.score['red'],
-                          self.game_time_complete() * 100))
+            if not self.quiet_mode:
+                print("GOAL! Blue!")
+                print('Score: Blue {0:2d} / Red {1:2d}     (at {2:3.2f}%)'
+                      .format(self.score['blue'], self.score['red'],
+                              self.game_time_complete() * 100))
             self.start()
             return GameResult.goal_blue
         else:
@@ -63,7 +68,7 @@ class Game:
         return self.ball.body.position[0] > (Constants.FIELD_LENGTH - 1) - (Constants.GOAL_WIDTH + Constants.BALL_RADIUS)
 
     def game_time_complete(self):
-        return float(self.state.ticks) / float(Constants.GAME_LENGTH)
+        return float(self.state.ticks) / float(self.game_length)
 
     def run_brains(self):
         blue_team = self.teams[0]
@@ -113,6 +118,15 @@ class Game:
                 player_velocity = p.body.normal_velocity()
                 if player_velocity > Constants.MAX_PLAYER_VELOCITY:
                     p.body.velocity = np.multiply(p.body.velocity, Constants.MAX_PLAYER_VELOCITY / player_velocity)
+
+    def play(self):
+        while True:
+            status = self.tick()
+            if status == GameResult.end:
+                break
+
+        return self.score
+
 
 class Ball:
     def __init__(self, radius, x, y):
