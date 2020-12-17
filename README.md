@@ -20,7 +20,7 @@ This sets up a game without any graphics - perfect for quickly pitting two brain
 ## Example game
 https://www.youtube.com/watch?v=YipEvWC1kt4
 
-This pits two simple heuristics algorithms against each other.
+This pits two simple heuristic algorithms against each other.
 
 BehindAndTowards (Red): Employs an extremely simple (yet surprisingly simple) strategy of getting behind the ball and then pushing towards the goal.
 
