@@ -26,6 +26,16 @@ BehindAndTowards (Red): Employs an extremely simple (yet surprisingly simple) st
 
 AttackersAndDefenders (Blue): Employs a more complicated strategy with defenders hanging back waiting for the ball and more aggressive attackers attacking the ball. 
 
+## Roadmap
+- Current status: Prototype
+
+Next milestone: Alpha release
+- Unit tests (I know!)
+- At least one Reinforcement learning agent
+- Improved grpahics for game. At the very least the score needs to be displayed
+- (possibly) Improved physics engine - although a few glitches to exploit might be more interesting
+- (possibly) Improved physics engine performance. Important for faster training times.
+
 ## Contributing
 
 See https://github.com/eparkinson/ai-soccer/blob/main/CONTRIBUTING.md
