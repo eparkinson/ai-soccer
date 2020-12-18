@@ -5,7 +5,7 @@ from aisoccer.game import *
 
 class Field(pyglet.window.Window):
     # Constants relating to visual display of games go here.
-    UPDATE_FREQUENCY = 0.05
+    UPDATE_FREQUENCY = 0.02
     BALL_COLOUR = (255, 255, 255)
     FIELD_COLOUR = (96, 96, 96)
     TEAM_COLOURS = [(64, 64, 255), (255, 64, 64)]
@@ -30,11 +30,17 @@ class Field(pyglet.window.Window):
         pyglet.clock.schedule_interval(self.update, Field.UPDATE_FREQUENCY)
         pyglet.app.run()
 
+    def restart_game(self, game):
+        self.game_over = False
+        self.game = game
+
     def update(self, dt):
         if not self.game_over:
             result = self.game.tick()
             if result == GameResult.end:
                 self.game_over = True
+                pyglet.app.exit()
+                self.close()
 
 
     def draw_field(self):

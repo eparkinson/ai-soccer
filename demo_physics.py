@@ -1,6 +1,7 @@
-import pyglet
-from random import random
 from random import randint
+from random import random
+
+import pyglet
 
 from aisoccer.physics import *
 

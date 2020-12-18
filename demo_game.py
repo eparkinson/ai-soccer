@@ -1,6 +1,5 @@
-from aisoccer.game import *
-from aisoccer.graphics.field import *
 from aisoccer.brains.DefendersAndAttackers import *
+from aisoccer.graphics.field import *
 
 game = Game(DefendersAndAttackers(), BehindAndTowards())
 field = Field(game)
