@@ -1,5 +1,5 @@
 import pyglet
-from aisoccer.team import *
+
 from aisoccer.game import *
 
 
@@ -19,6 +19,8 @@ class Field(pyglet.window.Window):
         self.game = game
         self.game_over = False
 
+        self.score = "0 - 0"
+
     def on_draw(self):
         self.clear()
 
@@ -37,11 +39,13 @@ class Field(pyglet.window.Window):
     def update(self, dt):
         if not self.game_over:
             result = self.game.tick()
+
+            self.score = "{} - {}".format(self.game.score["blue"], self.game.score["red"])
+
             if result == GameResult.end:
                 self.game_over = True
                 pyglet.app.exit()
                 self.close()
-
 
     def draw_field(self):
         field = pyglet.shapes.Rectangle(0, 0, Constants.FIELD_LENGTH - 1, Constants.FIELD_HEIGHT - 1,
@@ -64,6 +68,15 @@ class Field(pyglet.window.Window):
                                          Constants.FIELD_LENGTH / 2, Constants.FIELD_HEIGHT,
                                          width=4, color=Field.FIELD_COLOUR)
         center_line.draw()
+
+        score_board = pyglet.text.Label(self.score,
+                                        color=(255, 255, 255, 255),
+                                        font_size=50,
+                                        x=Constants.FIELD_LENGTH // 2,
+                                        y=Constants.FIELD_HEIGHT + 20,
+                                        anchor_x="center")
+
+        score_board.draw()
 
     def draw_ball(self):
         ball = self.game.ball.body
