@@ -1,36 +1,41 @@
 from enum import Enum
 from random import random
 
-from aisoccer.constants import *
-from aisoccer.physics import *
+import pandas
+
 from aisoccer.team import *
 
 
 class Game:
-    def __init__(self, blue_brain, red_brain, game_length=Constants.GAME_LENGTH, quiet_mode=False):
+    def __init__(self, blue_brain, red_brain, game_length=Constants.GAME_LENGTH, quiet_mode=False, record_game=False):
         self.quiet_mode = quiet_mode
         self.game_length = game_length
         self.teams = [Team(blue_brain, 0), Team(red_brain, 1)]
         self.state = PhyState(Constants.FIELD_LENGTH, Constants.FIELD_HEIGHT)
         self.ball = None
+        self.move_df = {}
+        self.record_game = record_game
         self.score = {
             'red': 0,
             'blue': 0
         }
+
+        if self.record_game:
+            self.init_df()
 
         self.start()
 
     def start(self):
         self.state.clear()
         self.ball = Ball(Constants.BALL_RADIUS, Constants.FIELD_LENGTH / 2, Constants.FIELD_HEIGHT / 2)
-        self.state.add_body(self.ball.body)
-
-        self.ball.body.velocity = np.array([random()-0.5, random()-0.5])
 
         for team in self.teams:
             for player in team.players:
                 self.state.add_body(player.body)
             team.reset()
+
+        self.state.add_body(self.ball.body)
+        self.ball.body.velocity = np.array([random() - 0.5, random() - 0.5])
 
     def tick(self):
         if self.state.ticks >= self.game_length:
@@ -57,7 +62,7 @@ class Game:
             return GameResult.goal_blue
         else:
             self.run_brains()
-            self.limit_velocities() 
+            self.limit_velocities()
             self.state.tick()
             return GameResult.nothing
 
@@ -65,7 +70,8 @@ class Game:
         return self.ball.body.position[0] < Constants.GOAL_WIDTH + Constants.BALL_RADIUS
 
     def is_blue_goal(self):
-        return self.ball.body.position[0] > (Constants.FIELD_LENGTH - 1) - (Constants.GOAL_WIDTH + Constants.BALL_RADIUS)
+        return self.ball.body.position[0] > (Constants.FIELD_LENGTH - 1) - (
+                Constants.GOAL_WIDTH + Constants.BALL_RADIUS)
 
     def game_time_complete(self):
         return float(self.state.ticks) / float(self.game_length)
@@ -98,6 +104,14 @@ class Game:
                                     game_time)
         blue_team.apply_move(blue_move)
 
+        if self.record_game:
+            self.record_move(blue_players_pos, blue_players_vel,
+                             red_players_pos, red_players_vel,
+                             ball_pos, ball_vel,
+                             blue_score, red_score,
+                             game_time,
+                             blue_brain.last_move)
+
         # TODO: translate red positions and velocities
         #       so that both brains think that they are playing from left (0,y) to right (MAX_X,y)
         red_move = red_brain.move(flip_pos(red_players_pos), flip_vel(red_players_vel),
@@ -127,6 +141,72 @@ class Game:
 
         return self.score
 
+    def record_move(self, my_players_pos, my_players_vel,
+                    opp_players_pos, opp_players_vel,
+                    ball_pos, ball_vel,
+                    my_score, opp_score,
+                    game_time,
+                    moves):
+        self.move_df["bp_x"].append(ball_pos[0])
+        self.move_df["bp_y"].append(ball_pos[1])
+        self.move_df["bv_x"].append(ball_vel[0])
+        self.move_df["bv_y"].append(ball_vel[1])
+        self.move_df["ms"].append(my_score)
+        self.move_df["os"].append(opp_score)
+        self.move_df["gt"].append(game_time)
+
+        for i in range(5):
+            self.move_df["mpp_" + str(i) + "_x"].append(my_players_pos[i][0])
+            self.move_df["mpp_" + str(i) + "_y"].append(my_players_pos[i][1])
+
+            self.move_df["mpv_" + str(i) + "_x"].append(my_players_vel[i][0])
+            self.move_df["mpv_" + str(i) + "_y"].append(my_players_vel[i][1])
+
+            self.move_df["opp_" + str(i) + "_x"].append(opp_players_pos[i][0])
+            self.move_df["opp_" + str(i) + "_y"].append(opp_players_pos[i][1])
+
+            self.move_df["opv_" + str(i) + "_x"].append(opp_players_vel[i][0])
+            self.move_df["opv_" + str(i) + "_y"].append(opp_players_vel[i][1])
+
+            self.move_df["m_" + str(i) + "_x"].append(moves[i][0])
+            self.move_df["m_" + str(i) + "_y"].append(moves[i][1])
+
+    def init_df(self):
+        df = {"bp_x": [],
+              "bp_y": [],
+              "bv_x": [],
+              "bv_y": [],
+              "ms": [],
+              "os": [],
+              "gt": []}
+
+        for i in range(5):
+            df["mpp_" + str(i) + "_x"] = []
+            df["mpp_" + str(i) + "_y"] = []
+
+            df["mpv_" + str(i) + "_x"] = []
+            df["mpv_" + str(i) + "_y"] = []
+
+            df["opp_" + str(i) + "_x"] = []
+            df["opp_" + str(i) + "_y"] = []
+
+            df["opv_" + str(i) + "_x"] = []
+            df["opv_" + str(i) + "_y"] = []
+
+            df["m_" + str(i) + "_x"] = []
+            df["m_" + str(i) + "_y"] = []
+
+        self.move_df = df
+
+    def save_game(self, save_file):
+        pandas_df = pandas.DataFrame(self.move_df)
+        pandas_df.to_csv(save_file, index_label="row")
+
+    @staticmethod
+    def load_game(filename):
+        panda_df = pandas.read_csv(filename)
+        return panda_df.to_dict()
+
 
 class Ball:
     def __init__(self, radius, x, y):
@@ -140,15 +220,14 @@ class GameResult(Enum):
     end = 3
 
 
-
 def flip_pos(positions):
     result = positions.copy()
 
     if positions.ndim == 2:
         for i in range(len(positions)):
-            result[i][0] = Constants.FIELD_LENGTH-1-positions[i][0]
+            result[i][0] = Constants.FIELD_LENGTH - 1 - positions[i][0]
     elif positions.ndim == 1:
-        result[0] = Constants.FIELD_LENGTH-1-positions[0]
+        result[0] = Constants.FIELD_LENGTH - 1 - positions[0]
 
     return result
 
@@ -173,4 +252,3 @@ def flip_acc(accellerations):
             result[i][0] = -1 * accellerations[i][0]
 
     return result
-
