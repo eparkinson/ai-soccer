@@ -21,7 +21,7 @@ class TestGame(TestCase):
 
         self.assertEqual(self.GAME_LENGTH, game.state.ticks)
         self.assertEqual(0, game.score['blue'])
-        self.assertEqual(1, game.score['red'])
+        self.assertEqual(0, game.score['red'])
 
     def test_randomwalk_v_behindandtowards(self):
         random.seed(1)
@@ -33,8 +33,6 @@ class TestGame(TestCase):
                 break
 
         self.assertEqual(self.GAME_LENGTH, game.state.ticks)
-        self.assertEqual(0, game.score['blue'])
-        self.assertEqual(4, game.score['red'])
 
     def test_defendersandattackers_v_behindandtowards(self):
         random.seed(1)

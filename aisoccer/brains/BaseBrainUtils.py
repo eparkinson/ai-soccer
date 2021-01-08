@@ -1,11 +1,11 @@
-from abc import ABC
-
 from aisoccer.game import *
 
 
 class BaseBrainUtils(AbstractBrain, ABC):
-    def run_towards(self, player_index, position):
+    def run_towards(self, player_index, position, scale_factor=1):
         acceleration = np.subtract(position, self.my_players_pos[player_index])
+        if scale_factor > 1:
+            acceleration = np.divide(acceleration, scale_factor)
 
         return acceleration
 
@@ -13,7 +13,7 @@ class BaseBrainUtils(AbstractBrain, ABC):
         return self.my_players_pos[player_index][0] < self.ball_pos[0] - 5
 
     def run_back(self, player_index):
-        result = [-5, random() - 0.1]
+        result = [-1, 0]
         return result
 
     def is_ball_direction_forward(self):
