@@ -5,8 +5,12 @@ import numpy as np
 
 
 class AbstractBrain(ABC):
-    def __init__(self):
-        self.name = None
+    def __init__(self, name=None):
+        if name is None:
+            self.name = type(self).__name__
+        else:
+            self.name = name
+
         self.my_players_pos = None
         self.my_players_vel = None
         self.opp_players_pos = None
@@ -16,13 +20,6 @@ class AbstractBrain(ABC):
         self.my_score = None
         self.opp_score = None
         self.game_time = None
-
-    @final
-    def get_name(self):
-        if self.name is None:
-            return type(self).__name__
-        else:
-            return self.name
 
     @final
     def move(self,

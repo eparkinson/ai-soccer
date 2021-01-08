@@ -5,24 +5,11 @@ from aisoccer.game import Game
 
 
 class Tournament:
-    def __init__(self, brains, game_length=Constants.GAME_LENGTH, first_brain_against_all=False):
-        self.first_brain_against_all = first_brain_against_all
-        self.scores = {}
+    def __init__(self, brains, game_length=Constants.GAME_LENGTH, rounds=0):
+        self.rounds = rounds
         self.brains = brains
         self.game_length = game_length
         self.tournament_scores = TournamentScores(self.brains)
-
-        num_brains = len(self.brains)
-
-        self.pairings = []
-
-        if not first_brain_against_all:
-            for i in range(num_brains):
-                for j in range(i + 1, num_brains):
-                    self.pairings.append((i, j))
-        else:
-            for j in range(1, num_brains):
-                self.pairings.append((0, j))
 
     def start(self):
         print("Starting tournament")
@@ -30,20 +17,79 @@ class Tournament:
 
         print("PLAYERS:")
         for b in self.brains:
-            print("   " + b.get_name())
+            print("   " + b.name)
 
+        num_brains = len(self.brains)
+
+        if self.rounds == 0:  # round robin
+            pairings = []
+            for i in range(num_brains):
+                for j in range(i + 1, num_brains):
+                    pairings.append((i, j))
+            self.play_pairings(pairings)
+
+            self.print_scores()
+        else:  # Swiss
+            banned_pairings = []
+            round = 1
+
+            while round <= self.rounds:
+                round_pairings, round_byes = self.calculate_swiss_pairings(banned_pairings)
+
+                self.play_pairings(round_pairings)
+                banned_pairings.extend(round_pairings)
+
+                for player_num in round_byes:
+                    self.tournament_scores.table[player_num]["points"] += 1
+                    self.tournament_scores.table[player_num]["played"] += 1
+
+                round += 1
+
+                self.print_scores()
+
+    def calculate_swiss_pairings(self, banned_pairings):
+        table = self.get_table()
+        pairings = []
+        byes = set()
+        paired = set()
+
+        for player in table:
+            player_num = player["number"]
+
+            player_banned_pairings = set()
+            for bp in banned_pairings:
+                if bp[0] == player_num:
+                    player_banned_pairings.add(bp[1])
+                elif bp[1] == player_num:
+                    player_banned_pairings.add(bp[0])
+
+            if player_num not in paired:
+                for opponent in table:
+                    opponent_num = opponent["number"]
+                    if (opponent_num not in paired) \
+                            and (opponent_num not in player_banned_pairings) \
+                            and (opponent_num != player_num):
+                        pairing = tuple(sorted((player_num, opponent_num)))
+                        pairings.append(pairing)
+                        paired.add(player_num)
+                        paired.add(opponent_num)
+                        break
+
+        for player in table:
+            player_num = player["number"]
+            if player_num not in paired:
+                byes.add(player_num)
+
+        return pairings, byes
+
+    def play_pairings(self, pairings):
         futures = {}
-
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            for p in self.pairings:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            for p in pairings:
                 futures[p] = executor.submit(self.play, p)
-
-        for p in self.pairings:
+        for p in pairings:
             pairing_score = futures[p].result()
-            self.scores[p] = pairing_score
             self.tournament_scores.process(p, pairing_score)
-
-        self.print_scores()
 
     def play(self, pairing):
         blue_brain = self.brains[pairing[0]]
@@ -53,24 +99,15 @@ class Tournament:
         score = game.play()
         return score['blue'], score['red']
 
+    def get_table(self):
+        return self.tournament_scores.get_table()
+
     def print_scores(self):
-        print()
-        print("SCORES: ")
-        for p in self.pairings:
-            b0 = self.brains[p[0]]
-            b1 = self.brains[p[1]]
-            s0 = self.scores[p][0]
-            s1 = self.scores[p][1]
-
-            print("   " + b0.get_name() + " v " + b1.get_name() +
-                  "  score:  " + str(s0) + "-" + str(s1))
-
         print()
         print("TOURNAMENT SCORES:")
         print("                        NAME | NUM |     P |     W |     L |    GF |    GA |    GD |  POINTS")
 
-        for key in self.tournament_scores.table:
-            ts = self.tournament_scores.table[key]
+        for ts in self.get_table():
             print("   {0:25} | {1:3d} | {2:5d} | {3:5d} | {4:5d} | {5:5d} | {6:5d} | {7:5d} | {8:5d}"
                   .format(ts["name"], ts["number"],
                           ts["played"], ts["wins"], ts["losses"],
@@ -87,7 +124,7 @@ class TournamentScores:
             team_score = {}
 
             team_score["number"] = bnum
-            team_score["name"] = self.brains[bnum].get_name()
+            team_score["name"] = self.brains[bnum].name
             team_score["played"] = 0
             team_score["wins"] = 0
             team_score["losses"] = 0
@@ -98,6 +135,9 @@ class TournamentScores:
             team_score["points"] = 0
 
             self.table[bnum] = team_score
+
+    def get_table(self):
+        return sorted(self.table.values(), reverse=True, key=lambda row: row["points"])
 
     def process(self, p, pairing_score):
         (side1, side2) = p
