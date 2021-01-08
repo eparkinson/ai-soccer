@@ -1,16 +1,15 @@
-from aisoccer.brains.BaseBrainUtils import *
 from aisoccer.brains.BehindAndTowards import *
 
 
 class DefendersAndAttackers(BaseBrainUtils):
-    BASE_POS = [[100, 300],  [300, 300], [600, 100], [800, 500]]
+    BASE_POS = [[100., 200.], [180., 600.], [600., 300.], [600., 500.]]
 
     def do_move(self) -> np.array:
 
         result = []
 
         for i in range(4):
-            if 25 < self.distance_to_ball(i) < (i+1) * 100 :
+            if 25 < self.distance_to_ball(i) < (i + 1) * 100:
                 if self.is_behind_ball(i):
                     result.append(self.run_towards(i, self.ball_pos))
                 else:

@@ -15,8 +15,10 @@ class Team:
             self.players.append(Player(side, starting_position))
 
     def apply_move(self, move: np.array):
+        self.brain.last_move = []
         for i in range(len(self.players)):
-            self.players[i].apply_move(move[i])
+            normal_move = self.players[i].apply_move(move[i])
+            self.brain.last_move.append(normal_move)
 
     def reset(self):
         for i in range(Constants.NUM_PLAYERS):
@@ -46,8 +48,11 @@ class Player:
 
     def apply_move(self, move: np.array):
         norm = np.linalg.norm(move)
-        if norm > 0:
+        if norm > 1:
             normal_move = move / norm
         else:
             normal_move = move
+
         self.body.apply_acceleration(normal_move)
+
+        return normal_move

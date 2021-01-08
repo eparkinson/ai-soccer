@@ -1,5 +1,7 @@
-import numpy as np
 import copy
+from random import shuffle
+
+import numpy as np
 
 
 class Body(object):
@@ -105,6 +107,8 @@ class PhyState:
 
         for i in range(len(self.bodies)):
             self.bodies[i].set_state(new_bodies[i])
+
+        shuffle(self.bodies)
 
     def clear(self):
         self.bodies = []
