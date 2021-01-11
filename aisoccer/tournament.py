@@ -137,7 +137,9 @@ class TournamentScores:
             self.table[bnum] = team_score
 
     def get_table(self):
-        return sorted(self.table.values(), reverse=True, key=lambda row: row["points"])
+        return sorted(self.table.values(), reverse=True,
+                      key=lambda row: float(row["points"]) + float(row["goal_diff"]) / 100.0 + float(
+                          row["goals_for"]) / 10000.0)
 
     def process(self, p, pairing_score):
         (side1, side2) = p
