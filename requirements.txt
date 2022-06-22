@@ -1,4 +1,4 @@
 matplotlib
 pandas
-numpy==1.19.2
+numpy==1.22.0
 pyglet==1.5.11
