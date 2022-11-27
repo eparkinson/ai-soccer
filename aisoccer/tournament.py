@@ -1,4 +1,4 @@
-from concurrent.futures.thread import ThreadPoolExecutor
+from multiprocessing import Pool
 
 from aisoccer.constants import Constants
 from aisoccer.game import Game
@@ -83,13 +83,12 @@ class Tournament:
         return pairings, byes
 
     def play_pairings(self, pairings):
-        futures = {}
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            for p in pairings:
-                futures[p] = executor.submit(self.play, p)
-        for p in pairings:
-            pairing_score = futures[p].result()
-            self.tournament_scores.process(p, pairing_score)
+        with Pool(48) as pool:
+            results = pool.map(self.play, pairings)
+        for idr, r in enumerate(results):
+            pairing_score = r
+            pairing = pairings[idr]
+            self.tournament_scores.process(pairing, pairing_score)
 
     def play(self, pairing):
         blue_brain = self.brains[pairing[0]]
