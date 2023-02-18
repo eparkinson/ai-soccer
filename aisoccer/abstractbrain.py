@@ -53,7 +53,7 @@ class AbstractBrain(ABC):
         self.my_players_pos = my_players_pos
         self.my_players_vel = my_players_vel
         self.opp_players_pos = opp_players_pos
-        self.opp_players_pos = opp_players_vel
+        self.opp_players_vel = opp_players_vel
         self.ball_pos = ball_pos
         self.ball_vel = ball_vel
         self.my_score = my_score

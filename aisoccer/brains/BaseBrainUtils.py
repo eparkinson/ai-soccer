@@ -39,3 +39,10 @@ class BaseBrainUtils(AbstractBrain, ABC):
     def distance_to_ball(self, i):
         d = np.linalg.norm(np.subtract(self.ball_pos, self.my_players_pos[i]))
         return d
+
+    def to_list(self):
+        result = np.append(self.my_players_pos, self.opp_players_pos)
+        result = np.append(result, self.ball_pos)
+        result = np.append(result, self.ball_vel)
+
+        return result.tolist()

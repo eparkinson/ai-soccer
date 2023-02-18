@@ -131,3 +131,5 @@ dmypy.json
 # Intellij
 .idea/
 /.idea/
+aisoccer/brains/NNBrain.py
+neat-checkpoint-*

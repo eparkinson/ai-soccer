@@ -2,3 +2,5 @@ matplotlib
 pandas
 numpy==1.19.2
 pyglet==1.5.11
+neat
+visualize

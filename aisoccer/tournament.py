@@ -5,19 +5,21 @@ from aisoccer.game import Game
 
 
 class Tournament:
-    def __init__(self, brains, game_length=Constants.GAME_LENGTH, rounds=0):
+    def __init__(self, brains, game_length=Constants.GAME_LENGTH, rounds=0, print=True):
         self.rounds = rounds
         self.brains = brains
         self.game_length = game_length
+        self.print = print
         self.tournament_scores = TournamentScores(self.brains)
 
     def start(self):
-        print("Starting tournament")
-        print("")
+        if self.print:
+            print("Starting tournament")
+            print("")
 
-        print("PLAYERS:")
-        for b in self.brains:
-            print("   " + b.name)
+            print("PLAYERS:")
+            for b in self.brains:
+                print("   " + b.name)
 
         num_brains = len(self.brains)
 
@@ -46,6 +48,7 @@ class Tournament:
                 round += 1
 
                 self.print_scores()
+
 
     def calculate_swiss_pairings(self, banned_pairings):
         table = self.get_table()
@@ -103,16 +106,17 @@ class Tournament:
         return self.tournament_scores.get_table()
 
     def print_scores(self):
-        print()
-        print("TOURNAMENT SCORES:")
-        print("                        NAME | NUM |     P |     W |     L |    GF |    GA |    GD |  POINTS")
+        if self.print:
+            print()
+            print("TOURNAMENT SCORES:")
+            print("                        NAME | NUM |     P |     W |     L |    GF |    GA |    GD |  POINTS")
 
-        for ts in self.get_table():
-            print("   {0:25} | {1:3d} | {2:5d} | {3:5d} | {4:5d} | {5:5d} | {6:5d} | {7:5d} | {8:5d}"
-                  .format(ts["name"], ts["number"],
-                          ts["played"], ts["wins"], ts["losses"],
-                          ts["goals_for"], ts["goals_against"], ts["goal_diff"],
-                          ts["points"]))
+            for ts in self.get_table():
+                print("   {0:25} | {1:3d} | {2:5d} | {3:5d} | {4:5d} | {5:5d} | {6:5d} | {7:5d} | {8:5d}"
+                    .format(ts["name"], ts["number"],
+                            ts["played"], ts["wins"], ts["losses"],
+                            ts["goals_for"], ts["goals_against"], ts["goal_diff"],
+                            ts["points"]))
 
 
 class TournamentScores:
