@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 from aisoccer.abstractbrain import AbstractBrain
 from abc import ABCMeta
+from aisoccer.brains.AdaptiveChaser import AdaptiveChaser
 
 # Path to the brains folder
 BRAINS_FOLDER = Path(__file__).parent.parent / "aisoccer" / "brains"
@@ -70,3 +71,30 @@ def test_brain_instantiation():
             brain = BrainClass()
         except Exception as e:
             pytest.fail(f"Failed to instantiate {BrainClass.__name__}: {e}")
+
+def test_adaptive_chaser_defensive_strategy():
+    brain = AdaptiveChaser()
+    brain.my_score = 5
+    brain.opp_score = 3
+    brain.my_players_pos = np.array([[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]])
+    brain.ball_pos = np.array([10, 10])
+
+    moves = brain.do_move()
+
+    # Assert players move towards the goal defensively
+    goal_position = np.array([0, 0])
+    for move, player_pos in zip(moves, brain.my_players_pos):
+        assert np.allclose(move, goal_position - player_pos)
+
+def test_adaptive_chaser_offensive_strategy():
+    brain = AdaptiveChaser()
+    brain.my_score = 2
+    brain.opp_score = 5
+    brain.my_players_pos = np.array([[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]])
+    brain.ball_pos = np.array([10, 10])
+
+    moves = brain.do_move()
+
+    # Assert players move towards the ball aggressively
+    for move, player_pos in zip(moves, brain.my_players_pos):
+        assert np.allclose(move, brain.ball_pos - player_pos)

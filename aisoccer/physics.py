@@ -2,6 +2,7 @@ import copy
 from random import shuffle
 
 import numpy as np
+from numba import njit
 
 
 class Body(object):
@@ -19,16 +20,20 @@ class Body(object):
         self.position = body.position
         self.velocity = body.velocity
 
+    @njit
     def apply_acceleration(self, acceleration: np.array):
         self.acceleration = acceleration
         self.velocity = np.add(self.velocity, self.acceleration)
 
+    @njit
     def kick(self, velocity):
         self.velocity = np.add(self.velocity, velocity)
 
+    @njit
     def move(self):
         self.position = np.add(self.position, self.velocity)
 
+    @njit
     def bounce_wall(self, maxX, maxY):
         if self.position[0] < self.radius and self.velocity[0] < 0:
             self.velocity[0] = -self.velocity[0]

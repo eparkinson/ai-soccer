@@ -73,3 +73,22 @@ poetry run pytest
 - Abstract classes like `BaseBrainUtils` are excluded from tests.
 - Follow PEP8 and add docstrings to new classes and methods.
 - Keep brain logic simple and focused on computing accelerations.
+
+
+
+## Lessons Learned and Common Errors
+
+1. **Method Signatures**:
+   - Ensure that the `do_move` method in custom brains like `AdaptiveChaser` aligns with the `AbstractBrain` class design. Use instance variables set by the `move` method instead of expecting arguments.
+
+2. **Testing Defensive and Offensive Strategies**:
+   - Add unit tests to validate both defensive and offensive strategies for new brains.
+
+3. **Error Handling**:
+   - Address `TypeError` issues by carefully matching method signatures and expected arguments.
+
+4. **Tournament Validation**:
+   - Always run a full tournament to validate the integration of new brains and analyze their performance.
+
+5. **Constructor Design**:
+   - Ensure that all brain classes accept an optional `name` parameter in their constructors to avoid `TypeError` when adding them to the tournament script.

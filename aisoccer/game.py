@@ -19,6 +19,7 @@ class Game:
             'red': 0,
             'blue': 0
         }
+        self.last_goal_tick = 0  # Track the tick count of the last goal
 
         if self.record_game:
             self.init_df()
@@ -38,26 +39,32 @@ class Game:
         self.ball.body.velocity = np.array([random() - 0.5, random() - 0.5])
 
     def tick(self):
-        if self.state.ticks >= self.game_length:
+        if self.game_length != 0 and self.state.ticks >= self.game_length:
             if not self.quiet_mode:
                 print("Game Over!")
             return GameResult.end
         elif self.is_red_goal():
+            ticks_elapsed = self.state.ticks - self.last_goal_tick
+            self.last_goal_tick = self.state.ticks
             self.score['red'] += 1
             if not self.quiet_mode:
                 print("GOAL! Red!")
                 print('Score: Blue {0:2d} / Red {1:2d}     (at {2:3.2f}%)'
                       .format(self.score['blue'], self.score['red'],
                               self.game_time_complete() * 100))
+            self.notify_brains_goal('red', ticks_elapsed)
             self.start()
             return GameResult.goal_red
         elif self.is_blue_goal():
+            ticks_elapsed = self.state.ticks - self.last_goal_tick
+            self.last_goal_tick = self.state.ticks
             self.score['blue'] += 1
             if not self.quiet_mode:
                 print("GOAL! Blue!")
                 print('Score: Blue {0:2d} / Red {1:2d}     (at {2:3.2f}%)'
                       .format(self.score['blue'], self.score['red'],
                               self.game_time_complete() * 100))
+            self.notify_brains_goal('blue', ticks_elapsed)
             self.start()
             return GameResult.goal_blue
         else:
@@ -74,6 +81,8 @@ class Game:
                 Constants.GOAL_WIDTH + Constants.BALL_RADIUS)
 
     def game_time_complete(self):
+        if self.game_length == 0:
+            return 0.0  # Infinite game, no completion percentage
         return float(self.state.ticks) / float(self.game_length)
 
     def run_brains(self):
@@ -206,6 +215,24 @@ class Game:
     def load_game(filename):
         panda_df = pandas.read_csv(filename)
         return panda_df.to_dict()
+
+    def notify_brains_goal(self, scoring_team, ticks_elapsed):
+        game_state = {
+            "ticks_elapsed": ticks_elapsed,
+            # ...other game state details...
+        }
+        for team in self.teams:
+            print(f"Team side: {team.side}, Scoring team: {scoring_team}")  # Debugging log
+            if scoring_team == team.side:  # Correctly match scoring team with team side
+                reward = (1.0 / ticks_elapsed) * 1000  # Scale reward
+                team.brain.on_goal_scored(scoring_team, game_state)
+                print(f"Reward received: {reward:.2f} (Scoring team: {scoring_team})")
+                return  # Exit after processing the scoring team
+            else:
+                penalty = (-1.0 / ticks_elapsed) * 1000  # Scale penalty
+                team.brain.on_goal_conceded(scoring_team, game_state)
+                print(f"Penalty received: {penalty:.2f} (Scoring team: {scoring_team})")
+                break  # Ensure only one penalty is printed
 
 
 class Ball:

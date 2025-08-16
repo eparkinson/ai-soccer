@@ -2,16 +2,20 @@ from aisoccer.brains.BehindAndTowards import BehindAndTowards
 from aisoccer.brains.DefendersAndAttackers import DefendersAndAttackers
 from aisoccer.brains.RandomWalk import RandomWalk
 from aisoccer.brains.SimpleBrain import SimpleBrain  # Add SimpleBrain
+from aisoccer.brains.AdaptiveChaser import AdaptiveChaser  # Corrected import path
+from aisoccer.brains.StrategicPlanner import StrategicPlanner  # Import StrategicPlanner
 from aisoccer.tournament import *
 
 brains = []
-for i in range(5):  # Limit to 5 instances of each brain
+for i in range(4):  # Limit to 4 instances of each brain
     brains.append(BehindAndTowards("BAT-" + str(i)))
     brains.append(DefendersAndAttackers("DAA-" + str(i)))
     brains.append(RandomWalk("RAND-" + str(i)))
     brains.append(SimpleBrain("SIMPLE-" + str(i)))  # Add SimpleBrain instances
+    brains.append(AdaptiveChaser("ADAPTIVE-" + str(i)))  # Add AdaptiveChaser instances
+    brains.append(StrategicPlanner("STRATEGIC-" + str(i)))  # Add StrategicPlanner instances
 
-tourney = Tournament(brains, game_length=2500, rounds=9)
+tourney = Tournament(brains, game_length=5000, rounds=9)  # Double the game length
 tourney.start()
 
 def group_scores_by_brain_type(scores):
