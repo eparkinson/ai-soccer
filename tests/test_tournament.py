@@ -44,3 +44,28 @@ class TestTournament(TestCase):
         for score in self.round_robin_tourney.get_table():
             self.assertTrue(score["points"] <= previous_points)
             previous_points = score["points"]
+
+    def test_get_scores(self):
+        scores = self.round_robin_tourney.get_scores()
+        self.assertIsInstance(scores, list)
+        self.assertGreater(len(scores), 0)
+        for score in scores:
+            self.assertIn("name", score)
+            self.assertIn("points", score)
+
+    def test_grouped_scores(self):
+        scores = self.round_robin_tourney.get_scores()
+        grouped_scores = {}
+        for score in scores:
+            brain_type = score["name"].split('-')[0]
+            if brain_type not in grouped_scores:
+                grouped_scores[brain_type] = {'P': 0, 'W': 0, 'L': 0, 'GF': 0, 'GA': 0, 'GD': 0, 'POINTS': 0}
+            grouped_scores[brain_type]['P'] += score['played']
+            grouped_scores[brain_type]['W'] += score['wins']
+            grouped_scores[brain_type]['L'] += score['losses']
+            grouped_scores[brain_type]['GF'] += score['goals_for']
+            grouped_scores[brain_type]['GA'] += score['goals_against']
+            grouped_scores[brain_type]['GD'] += score['goal_diff']
+            grouped_scores[brain_type]['POINTS'] += score['points']
+        sorted_grouped_scores = sorted(grouped_scores.items(), key=lambda x: x[1]['POINTS'], reverse=True)
+        self.assertGreater(len(sorted_grouped_scores), 0)

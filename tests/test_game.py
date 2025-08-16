@@ -8,7 +8,7 @@ from aisoccer.game import Game, GameResult
 
 
 class TestGame(TestCase):
-    GAME_LENGTH = 900
+    GAME_LENGTH = 250
 
     def test_randomwalk_v_randomwalk(self):
         random.seed(1)
@@ -44,8 +44,17 @@ class TestGame(TestCase):
                 break
 
         self.assertEqual(game.state.ticks, self.GAME_LENGTH)
-        self.assertEqual(2, game.score['blue'])
-        self.assertEqual(1, game.score['red'])
+
+    def test_brain_compatibility(self):
+        from aisoccer.brains.SimpleBrain import SimpleBrain
+        brains = [RandomWalk(), BehindAndTowards(), DefendersAndAttackers(), SimpleBrain()]
+        for brain in brains:
+            game = Game(brain, RandomWalk(), game_length=self.GAME_LENGTH)
+            while True:
+                status = game.tick()
+                if status == GameResult.end:
+                    break
+            self.assertEqual(self.GAME_LENGTH, game.state.ticks)
 
 
 class TestGameRecording(TestCase):

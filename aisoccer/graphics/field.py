@@ -66,7 +66,10 @@ class Field(pyglet.window.Window):
 
         center_line = pyglet.shapes.Line(Constants.FIELD_LENGTH / 2, 0,
                                          Constants.FIELD_LENGTH / 2, Constants.FIELD_HEIGHT,
-                                         width=4, color=Field.FIELD_COLOUR)
+                                         color=Field.FIELD_COLOUR)
+        # If you want to set the thickness, set center_line.thickness = 4 (if supported by your pyglet version)
+        if hasattr(center_line, 'thickness'):
+            center_line.thickness = 4
         center_line.draw()
 
         score_board = pyglet.text.Label(self.score,
