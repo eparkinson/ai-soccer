@@ -1,2 +1,5 @@
 [flake8]
 max-line-length = 120
+
+# Exclude virtual environments and dependency folders
+exclude = .venv,venv,.git,__pycache__,.mypy_cache,.pytest_cache,build,dist
