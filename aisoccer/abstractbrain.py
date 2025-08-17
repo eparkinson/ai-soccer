@@ -60,8 +60,38 @@ class AbstractBrain(ABC):
         self.opp_score = opp_score
         self.game_time = game_time
 
-        return self.do_move()
+        game_state = {
+            "my_players_pos": my_players_pos,
+            "my_players_vel": my_players_vel,
+            "opp_players_pos": opp_players_pos,
+            "opp_players_vel": opp_players_vel,
+            "ball_pos": ball_pos,
+            "ball_vel": ball_vel,
+            "my_score": my_score,
+            "opp_score": opp_score,
+            "game_time": game_time
+        }
+
+        return self.do_move(game_state=game_state) if "game_state" in self.do_move.__code__.co_varnames else self.do_move()
 
     @abstractmethod
-    def do_move(self) -> np.array:
+    def do_move(self, game_state=None) -> np.array:
+        pass
+
+    def on_goal_scored(self, team: str, game_state: dict):
+        """
+        Callback triggered when a goal is scored.
+
+        :param team: The team that scored ('red' or 'blue').
+        :param game_state: The current game state as a dictionary.
+        """
+        pass
+
+    def on_goal_conceded(self, team: str, game_state: dict):
+        """
+        Callback triggered when a goal is conceded.
+
+        :param team: The team that conceded ('red' or 'blue').
+        :param game_state: The current game state as a dictionary.
+        """
         pass

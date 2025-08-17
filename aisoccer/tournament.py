@@ -101,6 +101,9 @@ class Tournament:
     def get_table(self):
         return self.tournament_scores.get_table()
 
+    def get_scores(self):
+        return self.tournament_scores.get_table()
+
     def print_scores(self):
         print()
         print("TOURNAMENT SCORES:")

@@ -131,3 +131,6 @@ dmypy.json
 # Intellij
 .idea/
 /.idea/
+
+# Ignore copilot instructions
+copilot_instructions.md
