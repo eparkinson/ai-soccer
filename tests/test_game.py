@@ -94,7 +94,8 @@ class TestGameRecording(TestCase):
             record_game=True,
         )
 
-        game.play()
+        score = game.play()
+        self.assertIsNotNone(score)
 
         self.assertTrue(game.move_df)
 
