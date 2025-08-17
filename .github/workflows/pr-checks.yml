@@ -25,6 +25,24 @@ jobs:
       - name: Install dependencies
         run: |
           poetry install
-      - name: Run pre-commit checks (black, isort, flake8, mypy, etc.)
+
+      - name: Run black
+        run: poetry run black --check .
+
+      - name: Run isort
+        run: poetry run isort --check-only .
+
+      - name: Run flake8
+        run: poetry run flake8 .
+
+      - name: Run mypy
+        run: poetry run mypy .
+
+      - name: Run hygiene hooks (trailing whitespace, end-of-file-fixer, requirements-txt-fixer)
         run: |
-          poetry run pre-commit run --all-files
+          poetry run pre-commit run trailing-whitespace --all-files
+          poetry run pre-commit run end-of-file-fixer --all-files
+          poetry run pre-commit run requirements-txt-fixer --all-files
+
+      - name: Run pytest
+        run: poetry run pytest
