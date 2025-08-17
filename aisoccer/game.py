@@ -60,7 +60,7 @@ class Game:
             if not self.quiet_mode:
                 print("GOAL! Red!")
                 print(
-                    "Score: Blue {0:2d} / Red {1:2d}     (at {2:3.2f}%)".format(
+                    "Score: Blue {:2d} / Red {:2d}     (at {:3.2f}%)".format(
                         self.score["blue"],
                         self.score["red"],
                         self.game_time_complete() * 100,
@@ -76,7 +76,7 @@ class Game:
             if not self.quiet_mode:
                 print("GOAL! Blue!")
                 print(
-                    "Score: Blue {0:2d} / Red {1:2d}     (at {2:3.2f}%)".format(
+                    "Score: Blue {:2d} / Red {:2d}     (at {:3.2f}%)".format(
                         self.score["blue"],
                         self.score["red"],
                         self.game_time_complete() * 100,

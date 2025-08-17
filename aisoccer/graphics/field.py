@@ -15,7 +15,7 @@ class Field(pyglet.window.Window):
     STATUS_BAR_HEIGHT = 100
 
     def __init__(self, game):
-        super(Field, self).__init__(
+        super().__init__(
             Constants.FIELD_LENGTH,
             height=Constants.FIELD_HEIGHT + Field.STATUS_BAR_HEIGHT,
         )

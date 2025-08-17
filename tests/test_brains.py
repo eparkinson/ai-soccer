@@ -2,7 +2,6 @@ import importlib
 import inspect
 from abc import ABCMeta
 from pathlib import Path
-from typing import List, Type
 
 import numpy as np
 import pytest
@@ -15,7 +14,7 @@ BRAINS_FOLDER = Path(__file__).parent.parent / "aisoccer" / "brains"
 
 
 # Dynamically find all brain implementations
-brain_classes: List[Type[AbstractBrain]] = []
+brain_classes: list[type[AbstractBrain]] = []
 for file in BRAINS_FOLDER.glob("*.py"):
     if file.name == "__init__.py":
         continue

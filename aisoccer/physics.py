@@ -4,7 +4,7 @@ from random import shuffle
 import numpy as np
 
 
-class Body(object):
+class Body:
     def __init__(self, radius, position):
         self.radius = radius
         self.position = np.array(position)
