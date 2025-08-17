@@ -1,0 +1,30 @@
+# PR Checks: Run all pre-commit checks (black, isort, flake8, mypy, pytest, and hygiene hooks)
+# Mirrors local pre-commit config for CI consistency
+
+name: PR Checks
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  pr-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
+      - name: Install Poetry
+        run: |
+          python -m pip install --upgrade pip
+          pip install poetry
+      - name: Install dependencies
+        run: |
+          poetry install
+      - name: Run pre-commit checks (black, isort, flake8, mypy, etc.)
+        run: |
+          poetry run pre-commit run --all-files

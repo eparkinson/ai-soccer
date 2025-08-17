@@ -61,20 +61,8 @@ class AbstractBrain(ABC):
         self.opp_score = opp_score
         self.game_time = game_time
 
-        game_state = {
-            "my_players_pos": my_players_pos,
-            "my_players_vel": my_players_vel,
-            "opp_players_pos": opp_players_pos,
-            "opp_players_vel": opp_players_vel,
-            "ball_pos": ball_pos,
-            "ball_vel": ball_vel,
-            "my_score": my_score,
-            "opp_score": opp_score,
-            "game_time": game_time,
-        }
-
         return (
-            self.do_move(game_state=game_state)
+            self.do_move()
             if "game_state" in self.do_move.__code__.co_varnames
             else self.do_move()
         )

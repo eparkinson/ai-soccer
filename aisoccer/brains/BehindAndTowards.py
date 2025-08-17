@@ -4,7 +4,7 @@ from aisoccer.brains.BaseBrainUtils import BaseBrainUtils
 
 
 class BehindAndTowards(BaseBrainUtils):
-    def do_move(self) -> np.array:
+    def do_move(self, game_state=None) -> np.array:
 
         actions = [[0] * 2] * 5
         for i in range(5):

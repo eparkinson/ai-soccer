@@ -18,10 +18,10 @@ class Team:
             self.players.append(Player(side, starting_position))
 
     def apply_move(self, move: np.array):
-        self.brain.last_move = []
+        self.brain.last_move = []  # type: ignore[attr-defined]
         for i in range(len(self.players)):
             normal_move = self.players[i].apply_move(move[i])
-            self.brain.last_move.append(normal_move)
+            self.brain.last_move.append(normal_move)  # type: ignore[attr-defined]
 
     def reset(self):
         for i in range(Constants.NUM_PLAYERS):

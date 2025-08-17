@@ -1,3 +1,6 @@
+from typing import List
+
+from aisoccer.abstractbrain import AbstractBrain
 from aisoccer.brains.AdaptiveChaser import AdaptiveChaser
 from aisoccer.brains.BehindAndTowards import BehindAndTowards
 from aisoccer.brains.DefendersAndAttackers import DefendersAndAttackers
@@ -6,7 +9,7 @@ from aisoccer.brains.SimpleBrain import SimpleBrain
 from aisoccer.brains.StrategicPlanner import StrategicPlanner
 from aisoccer.tournament import Tournament
 
-brains = []
+brains: List[AbstractBrain] = []
 for i in range(4):
     brains.append(BehindAndTowards("BAT-" + str(i)))
     brains.append(DefendersAndAttackers("DAA-" + str(i)))
@@ -58,6 +61,7 @@ print("\nGROUPED SCORES BY BRAIN TYPE:")
 print(
     f"{'BRAIN TYPE':<10} | {'P':>5} | {'W':>5} | {'L':>5} | {'GF':>5} | {'GA':>5} | {'GD':>5} | {'POINTS':>7}"
 )
+
 for brain_type, score in sorted_grouped_scores:
     print(
         f"{brain_type:<10} | {score['P']:>5} | {score['W']:>5} | {score['L']:>5} | {score['GF']:>5} |"
