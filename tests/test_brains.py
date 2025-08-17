@@ -86,7 +86,9 @@ def test_brain_instantiation():
     for BrainClass in brain_classes:
         try:
             brain = BrainClass()
-            assert isinstance(brain, BrainClass), f"Instantiation did not return a {BrainClass.__name__} instance."
+            assert isinstance(
+                brain, BrainClass
+            ), f"Instantiation did not return a {BrainClass.__name__} instance."
         except Exception as e:
             pytest.fail(f"Failed to instantiate {BrainClass.__name__}: {e}")
 
