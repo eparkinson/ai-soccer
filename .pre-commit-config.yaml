@@ -28,6 +28,7 @@ repos:
     rev: 7.0.0
     hooks:
       - id: flake8
+        args: [--config=.flake8]
 
   - repo: local
     hooks:
