@@ -11,7 +11,7 @@ class SimpleBrain(AbstractBrain):
     test and extend.
     """
 
-    def do_move(self, game_state=None) -> np.array:
+    def do_move(self, game_state=None) -> np.ndarray:
         # Defensive: ensure inputs are available and shaped correctly
         my_pos = np.asarray(self.my_players_pos, dtype=float)
         # ball_pos may be (2,) or (1,2)

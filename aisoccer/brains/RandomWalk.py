@@ -6,7 +6,7 @@ from aisoccer.abstractbrain import AbstractBrain
 
 
 class RandomWalk(AbstractBrain):
-    def do_move(self, game_state=None) -> np.array:
+    def do_move(self, game_state=None) -> np.ndarray:
         actions = [[0.0] * 2] * 5
 
         for i in range(5):

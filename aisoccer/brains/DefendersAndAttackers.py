@@ -6,7 +6,7 @@ from aisoccer.brains.BaseBrainUtils import BaseBrainUtils
 class DefendersAndAttackers(BaseBrainUtils):
     BASE_POS = [[100.0, 200.0], [180.0, 600.0], [600.0, 300.0], [600.0, 500.0]]
 
-    def do_move(self, game_state=None) -> np.array:
+    def do_move(self, game_state=None) -> np.ndarray:
 
         result = []
 

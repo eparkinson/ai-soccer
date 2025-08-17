@@ -19,7 +19,7 @@ class Body(object):
         self.position = body.position
         self.velocity = body.velocity
 
-    def apply_acceleration(self, acceleration: np.array):
+    def apply_acceleration(self, acceleration: np.ndarray):
         self.acceleration = acceleration
         self.velocity = np.add(self.velocity, self.acceleration)
 

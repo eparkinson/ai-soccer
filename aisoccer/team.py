@@ -17,7 +17,7 @@ class Team:
             starting_position = Constants.STARTING_POSITIONS[side][i]
             self.players.append(Player(side, starting_position))
 
-    def apply_move(self, move: np.array):
+    def apply_move(self, move: np.ndarray):
         self.brain.last_move = []  # type: ignore[attr-defined]
         for i in range(len(self.players)):
             normal_move = self.players[i].apply_move(move[i])
@@ -51,7 +51,7 @@ class Player:
         self.side = side
         self.body = Body(Constants.PLAYER_RADIUS, starting_position)
 
-    def apply_move(self, move: np.array):
+    def apply_move(self, move: np.ndarray):
         norm = np.linalg.norm(move)
         if norm > 1:
             normal_move = move / norm
