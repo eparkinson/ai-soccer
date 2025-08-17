@@ -1,6 +1,9 @@
-from aisoccer.abstractbrain import AbstractBrain
 import random
+
 import numpy as np
+
+from aisoccer.abstractbrain import AbstractBrain
+
 
 class LearningBrain(AbstractBrain):
     def __init__(self, name=None):
@@ -16,7 +19,7 @@ class LearningBrain(AbstractBrain):
         """
         # Randomly choose a direction and speed for now
         direction = random.uniform(0, 360)  # Angle in degrees
-        speed = random.uniform(0, 1)       # Speed as a fraction of max speed
+        speed = random.uniform(0, 1)  # Speed as a fraction of max speed
         return direction, speed
 
     def do_move(self, game_state=None):
@@ -55,8 +58,8 @@ class LearningBrain(AbstractBrain):
         :param team: The team that scored ('red' or 'blue').
         :param game_state: The current game state as a dictionary.
         """
-        if team == 'blue':  # Assuming this brain is on the blue team
-            ticks_elapsed = game_state.get('ticks_elapsed', 1)
+        if team == "blue":  # Assuming this brain is on the blue team
+            ticks_elapsed = game_state.get("ticks_elapsed", 1)
             reward = 1.0 / ticks_elapsed  # Higher reward for faster goals
             self.update_q_table(reward=reward)
 
@@ -67,7 +70,7 @@ class LearningBrain(AbstractBrain):
         :param team: The team that conceded ('red' or 'blue').
         :param game_state: The current game state as a dictionary.
         """
-        if team == 'blue':  # Assuming this brain is on the blue team
-            ticks_elapsed = game_state.get('ticks_elapsed', 1)
+        if team == "blue":  # Assuming this brain is on the blue team
+            ticks_elapsed = game_state.get("ticks_elapsed", 1)
             penalty = -1.0 / ticks_elapsed  # Higher penalty for faster concessions
             self.update_q_table(reward=penalty)

@@ -1,3 +1,4 @@
+
 # ai-soccer
 Physics based, soccer game sandbox to pit AI agents against each other
 
@@ -24,10 +25,10 @@ This pits two simple heuristic algorithms against each other.
 
 BehindAndTowards (Red): Employs an extremely simple (yet surprisingly simple) strategy of getting behind the ball and then pushing towards the goal.
 
-AttackersAndDefenders (Blue): Employs a more complicated strategy with defenders hanging back waiting for the ball and more aggressive attackers attacking the ball. 
+AttackersAndDefenders (Blue): Employs a more complicated strategy with defenders hanging back waiting for the ball and more aggressive attackers attacking the ball.
 
 ## Roadmap
-Current status: 
+Current status:
  - Prototype
 
 Next milestone: Alpha release
@@ -131,4 +132,16 @@ The following design documents provide detailed insights into various aspects of
 
 The table below summarizes the performance scores of each brain based on the last full tournament results:
 
-coming soon...
+
+## Todo: quality improvements
+
+- **Add/expand unit tests** for brains and edge cases.
+- **Add error handling** for file I/O and invalid states.
+- **Add docstrings** to all public classes and methods.
+- **Centralize magic numbers/constants** in a config or constants module.
+- **Consider code coverage in CI** for better test quality tracking.
+- **Refactor code duplication** in brains and utilities for maintainability.
+- **Review type safety**: minimize use of `Any` and `type: ignore` where possible.
+- **Constructor consistency**: ensure all brain classes accept an optional `name` parameter.
+- **Method signatures**: double-check that all overridden methods match their base class signatures.
+- **Profile and optimize performance** if scaling up tournaments or training.

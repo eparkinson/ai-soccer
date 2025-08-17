@@ -1,17 +1,21 @@
-import pytest
 import importlib
 import inspect
-import numpy as np
-from pathlib import Path
-from aisoccer.abstractbrain import AbstractBrain
 from abc import ABCMeta
+from pathlib import Path
+from typing import List, Type
+
+import numpy as np
+import pytest
+
+from aisoccer.abstractbrain import AbstractBrain
 from aisoccer.brains.AdaptiveChaser import AdaptiveChaser
 
 # Path to the brains folder
 BRAINS_FOLDER = Path(__file__).parent.parent / "aisoccer" / "brains"
 
+
 # Dynamically find all brain implementations
-brain_classes = []
+brain_classes: List[Type[AbstractBrain]] = []
 for file in BRAINS_FOLDER.glob("*.py"):
     if file.name == "__init__.py":
         continue
@@ -25,6 +29,7 @@ for file in BRAINS_FOLDER.glob("*.py"):
         ):
             brain_classes.append(obj)
 
+
 @pytest.mark.parametrize("BrainClass", brain_classes)
 def test_brain_implementation(BrainClass):
     """Test that each brain implementation behaves correctly."""
@@ -32,8 +37,12 @@ def test_brain_implementation(BrainClass):
     brain = BrainClass()
 
     # Check that the brain implements do_move
-    assert hasattr(brain, "do_move"), f"{BrainClass.__name__} does not implement do_move."
-    assert callable(getattr(brain, "do_move")), f"{BrainClass.__name__}.do_move is not callable."
+    assert hasattr(
+        brain, "do_move"
+    ), f"{BrainClass.__name__} does not implement do_move."
+    assert callable(
+        getattr(brain, "do_move")
+    ), f"{BrainClass.__name__}.do_move is not callable."
 
     # Mock inputs for the move method
     my_players_pos = np.zeros((5, 2))
@@ -56,21 +65,33 @@ def test_brain_implementation(BrainClass):
         ball_vel,
         my_score,
         opp_score,
-        game_time
+        game_time,
     )
 
     # Validate the result
-    assert isinstance(result, np.ndarray), f"{BrainClass.__name__}.move did not return a numpy array."
-    assert result.shape == (5, 2), f"{BrainClass.__name__}.move returned an array with incorrect shape: {result.shape}."
-    assert np.isfinite(result).all(), f"{BrainClass.__name__}.move returned non-finite values."
+    assert isinstance(
+        result, np.ndarray
+    ), f"{BrainClass.__name__}.move did not return a numpy array."
+    assert result.shape == (
+        5,
+        2,
+    ), f"{BrainClass.__name__}.move returned an array with incorrect shape: {result.shape}."
+    assert np.isfinite(
+        result
+    ).all(), f"{BrainClass.__name__}.move returned non-finite values."
+
 
 def test_brain_instantiation():
     """Test that all brain implementations can be instantiated."""
     for BrainClass in brain_classes:
         try:
             brain = BrainClass()
+            assert isinstance(
+                brain, BrainClass
+            ), f"Instantiation did not return a {BrainClass.__name__} instance."
         except Exception as e:
             pytest.fail(f"Failed to instantiate {BrainClass.__name__}: {e}")
+
 
 def test_adaptive_chaser_defensive_strategy():
     brain = AdaptiveChaser()
@@ -85,6 +106,7 @@ def test_adaptive_chaser_defensive_strategy():
     goal_position = np.array([0, 0])
     for move, player_pos in zip(moves, brain.my_players_pos):
         assert np.allclose(move, goal_position - player_pos)
+
 
 def test_adaptive_chaser_offensive_strategy():
     brain = AdaptiveChaser()

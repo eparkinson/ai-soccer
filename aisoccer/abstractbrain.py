@@ -22,33 +22,34 @@ class AbstractBrain(ABC):
         self.game_time = None
 
     @final
-    def move(self,
-             my_players_pos: np.array,
-             my_players_vel: np.array,
-             opp_players_pos: np.array,
-             opp_players_vel: np.array,
-             ball_pos: np.array,
-             ball_vel: np.array,
-             my_score: int,
-             opp_score: int,
-             game_time: float
-             ) -> np.array:
+    def move(
+        self,
+        my_players_pos: np.ndarray,
+        my_players_vel: np.ndarray,
+        opp_players_pos: np.ndarray,
+        opp_players_vel: np.ndarray,
+        ball_pos: np.ndarray,
+        ball_vel: np.ndarray,
+        my_score: int,
+        opp_score: int,
+        game_time: float,
+    ) -> np.ndarray:
         """
-            my_players_pos - a 5 x 2 matrix where the i'th row is the 2D position vector for friendly player i.
-            my_players_vel - a 5 x 2 matrix where the i'th row is the 2D velocity vector for friendly player i.
+        my_players_pos - a 5 x 2 matrix where the i'th row is the 2D position vector for friendly player i.
+        my_players_vel - a 5 x 2 matrix where the i'th row is the 2D velocity vector for friendly player i.
 
-            opp_players_pos - a 5 x 2 matrix where the i'th row is the 2D position vector for opposing player i.
-            opp_players_vel - a 5 x 2 matrix where the i'th row is the 2D velocity vector for opposing player i.
+        opp_players_pos - a 5 x 2 matrix where the i'th row is the 2D position vector for opposing player i.
+        opp_players_vel - a 5 x 2 matrix where the i'th row is the 2D velocity vector for opposing player i.
 
-            ball_pos - a 1 x 2 matrix (2D vector) for the ball's position
-            ball_vel - a 1 x 2 matrix (2D vector) for the ball's velocity
+        ball_pos - a 1 x 2 matrix (2D vector) for the ball's position
+        ball_vel - a 1 x 2 matrix (2D vector) for the ball's velocity
 
-            my_score - number of goals the friendly team has scored
-            opp_score - number of goals the opposing team has scored
+        my_score - number of goals the friendly team has scored
+        opp_score - number of goals the opposing team has scored
 
-            game_time: a float between 0 and 1 indicating the percentage game time elapsed
+        game_time: a float between 0 and 1 indicating the percentage game time elapsed
 
-            OUTPUT - a 5 x 2 matrix where the i'th row is the 2D acceleration vector for friendly player i
+        OUTPUT - a 5 x 2 matrix where the i'th row is the 2D acceleration vector for friendly player i
         """
         self.my_players_pos = my_players_pos
         self.my_players_vel = my_players_vel
@@ -60,22 +61,14 @@ class AbstractBrain(ABC):
         self.opp_score = opp_score
         self.game_time = game_time
 
-        game_state = {
-            "my_players_pos": my_players_pos,
-            "my_players_vel": my_players_vel,
-            "opp_players_pos": opp_players_pos,
-            "opp_players_vel": opp_players_vel,
-            "ball_pos": ball_pos,
-            "ball_vel": ball_vel,
-            "my_score": my_score,
-            "opp_score": opp_score,
-            "game_time": game_time
-        }
-
-        return self.do_move(game_state=game_state) if "game_state" in self.do_move.__code__.co_varnames else self.do_move()
+        return (
+            self.do_move()
+            if "game_state" in self.do_move.__code__.co_varnames
+            else self.do_move()
+        )
 
     @abstractmethod
-    def do_move(self, game_state=None) -> np.array:
+    def do_move(self, game_state=None) -> np.ndarray:
         pass
 
     def on_goal_scored(self, team: str, game_state: dict):

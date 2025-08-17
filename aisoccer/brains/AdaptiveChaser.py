@@ -1,5 +1,7 @@
-from aisoccer.abstractbrain import AbstractBrain
 import numpy as np
+
+from aisoccer.abstractbrain import AbstractBrain
+
 
 class AdaptiveChaser(AbstractBrain):
     def __init__(self, name=None):

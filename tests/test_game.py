@@ -20,8 +20,8 @@ class TestGame(TestCase):
                 break
 
         self.assertEqual(self.GAME_LENGTH, game.state.ticks)
-        self.assertEqual(0, game.score['blue'])
-        self.assertEqual(0, game.score['red'])
+        self.assertEqual(0, game.score["blue"])
+        self.assertEqual(0, game.score["red"])
 
     def test_randomwalk_v_behindandtowards(self):
         random.seed(1)
@@ -36,7 +36,9 @@ class TestGame(TestCase):
 
     def test_defendersandattackers_v_behindandtowards(self):
         random.seed(1)
-        game = Game(DefendersAndAttackers(), BehindAndTowards(), game_length=self.GAME_LENGTH)
+        game = Game(
+            DefendersAndAttackers(), BehindAndTowards(), game_length=self.GAME_LENGTH
+        )
 
         while True:
             status = game.tick()
@@ -47,7 +49,13 @@ class TestGame(TestCase):
 
     def test_brain_compatibility(self):
         from aisoccer.brains.SimpleBrain import SimpleBrain
-        brains = [RandomWalk(), BehindAndTowards(), DefendersAndAttackers(), SimpleBrain()]
+
+        brains = [
+            RandomWalk(),
+            BehindAndTowards(),
+            DefendersAndAttackers(),
+            SimpleBrain(),
+        ]
         for brain in brains:
             game = Game(brain, RandomWalk(), game_length=self.GAME_LENGTH)
             while True:
@@ -62,29 +70,49 @@ class TestGameRecording(TestCase):
 
     def test_if_no_recording_then_df_not_initialized(self):
         random.seed(1)
-        game = Game(DefendersAndAttackers(), BehindAndTowards(), game_length=self.GAME_LENGTH)
+        game = Game(
+            DefendersAndAttackers(), BehindAndTowards(), game_length=self.GAME_LENGTH
+        )
         self.assertFalse(game.move_df)
 
     def test_if_recording_then_df_initialized(self):
         random.seed(1)
-        game = Game(DefendersAndAttackers(), BehindAndTowards(), game_length=self.GAME_LENGTH, record_game=True)
+        game = Game(
+            DefendersAndAttackers(),
+            BehindAndTowards(),
+            game_length=self.GAME_LENGTH,
+            record_game=True,
+        )
         self.assertTrue(game.move_df)
 
     def test_recording_format(self):
         random.seed(1)
-        game = Game(DefendersAndAttackers(), BehindAndTowards(), game_length=self.GAME_LENGTH, record_game=True)
+        game = Game(
+            DefendersAndAttackers(),
+            BehindAndTowards(),
+            game_length=self.GAME_LENGTH,
+            record_game=True,
+        )
 
         score = game.play()
+        self.assertIsNotNone(score)
 
         self.assertTrue(game.move_df)
 
         expected_length = len(game.move_df["m_0_x"])
 
         for key in game.move_df:
-            self.assertEqual(len(game.move_df[key]), expected_length, "length of: " + key)
+            self.assertEqual(
+                len(game.move_df[key]), expected_length, "length of: " + key
+            )
 
     def test_save_recording(self):
         random.seed(1)
-        game = Game(DefendersAndAttackers(), BehindAndTowards(), game_length=self.GAME_LENGTH, record_game=True)
-        score = game.play()
+        game = Game(
+            DefendersAndAttackers(),
+            BehindAndTowards(),
+            game_length=self.GAME_LENGTH,
+            record_game=True,
+        )
+        game.play()
         game.save_game("test.csv")

@@ -10,10 +10,15 @@ class TestTournament(TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.round_robin_tourney = Tournament([BehindAndTowards("anne"),
-                                              DefendersAndAttackers("bob"),
-                                              RandomWalk("charlie")]
-                                             , game_length=1000, rounds=0)
+        cls.round_robin_tourney = Tournament(
+            [
+                BehindAndTowards("anne"),
+                DefendersAndAttackers("bob"),
+                RandomWalk("charlie"),
+            ],
+            game_length=1000,
+            rounds=0,
+        )
         cls.round_robin_tourney.start()
 
         swiss_brains = []
@@ -38,7 +43,6 @@ class TestTournament(TestCase):
             self.assertEqual(3, score["played"])
 
     def test_sorted_table(self):
-        table = self.round_robin_tourney.get_table()
         previous_points = 99999
 
         for score in self.round_robin_tourney.get_table():
@@ -57,15 +61,25 @@ class TestTournament(TestCase):
         scores = self.round_robin_tourney.get_scores()
         grouped_scores = {}
         for score in scores:
-            brain_type = score["name"].split('-')[0]
+            brain_type = score["name"].split("-")[0]
             if brain_type not in grouped_scores:
-                grouped_scores[brain_type] = {'P': 0, 'W': 0, 'L': 0, 'GF': 0, 'GA': 0, 'GD': 0, 'POINTS': 0}
-            grouped_scores[brain_type]['P'] += score['played']
-            grouped_scores[brain_type]['W'] += score['wins']
-            grouped_scores[brain_type]['L'] += score['losses']
-            grouped_scores[brain_type]['GF'] += score['goals_for']
-            grouped_scores[brain_type]['GA'] += score['goals_against']
-            grouped_scores[brain_type]['GD'] += score['goal_diff']
-            grouped_scores[brain_type]['POINTS'] += score['points']
-        sorted_grouped_scores = sorted(grouped_scores.items(), key=lambda x: x[1]['POINTS'], reverse=True)
+                grouped_scores[brain_type] = {
+                    "P": 0,
+                    "W": 0,
+                    "L": 0,
+                    "GF": 0,
+                    "GA": 0,
+                    "GD": 0,
+                    "POINTS": 0,
+                }
+            grouped_scores[brain_type]["P"] += score["played"]
+            grouped_scores[brain_type]["W"] += score["wins"]
+            grouped_scores[brain_type]["L"] += score["losses"]
+            grouped_scores[brain_type]["GF"] += score["goals_for"]
+            grouped_scores[brain_type]["GA"] += score["goals_against"]
+            grouped_scores[brain_type]["GD"] += score["goal_diff"]
+            grouped_scores[brain_type]["POINTS"] += score["points"]
+        sorted_grouped_scores = sorted(
+            grouped_scores.items(), key=lambda x: x[1]["POINTS"], reverse=True
+        )
         self.assertGreater(len(sorted_grouped_scores), 0)

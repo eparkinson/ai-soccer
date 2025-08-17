@@ -1,13 +1,12 @@
-from random import random
+import numpy as np
 
-from aisoccer.abstractbrain import *
-from aisoccer.brains.BaseBrainUtils import *
+from aisoccer.brains.BaseBrainUtils import BaseBrainUtils
 
 
 class BehindAndTowards(BaseBrainUtils):
-    def do_move(self) -> np.array:
+    def do_move(self, game_state=None) -> np.ndarray:
 
-        actions = arr = [[0]*2]*5
+        actions = [[0] * 2] * 5
         for i in range(5):
             if self.is_behind_ball(i):
                 actions[i] = self.run_towards(i, self.ball_pos)

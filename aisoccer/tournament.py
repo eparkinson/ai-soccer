@@ -34,7 +34,9 @@ class Tournament:
             round = 1
 
             while round <= self.rounds:
-                round_pairings, round_byes = self.calculate_swiss_pairings(banned_pairings)
+                round_pairings, round_byes = self.calculate_swiss_pairings(
+                    banned_pairings
+                )
 
                 self.play_pairings(round_pairings)
                 banned_pairings.extend(round_pairings)
@@ -66,9 +68,11 @@ class Tournament:
             if player_num not in paired:
                 for opponent in table:
                     opponent_num = opponent["number"]
-                    if (opponent_num not in paired) \
-                            and (opponent_num not in player_banned_pairings) \
-                            and (opponent_num != player_num):
+                    if (
+                        (opponent_num not in paired)
+                        and (opponent_num not in player_banned_pairings)
+                        and (opponent_num != player_num)
+                    ):
                         pairing = tuple(sorted((player_num, opponent_num)))
                         pairings.append(pairing)
                         paired.add(player_num)
@@ -96,7 +100,7 @@ class Tournament:
 
         game = Game(blue_brain, red_brain, self.game_length, True)
         score = game.play()
-        return score['blue'], score['red']
+        return score["blue"], score["red"]
 
     def get_table(self):
         return self.tournament_scores.get_table()
@@ -107,14 +111,24 @@ class Tournament:
     def print_scores(self):
         print()
         print("TOURNAMENT SCORES:")
-        print("                        NAME | NUM |     P |     W |     L |    GF |    GA |    GD |  POINTS")
+        print(
+            "                        NAME | NUM |     P |     W |     L |    GF |    GA |    GD |  POINTS"
+        )
 
         for ts in self.get_table():
-            print("   {0:25} | {1:3d} | {2:5d} | {3:5d} | {4:5d} | {5:5d} | {6:5d} | {7:5d} | {8:5d}"
-                  .format(ts["name"], ts["number"],
-                          ts["played"], ts["wins"], ts["losses"],
-                          ts["goals_for"], ts["goals_against"], ts["goal_diff"],
-                          ts["points"]))
+            print(
+                "   {0:25} | {1:3d} | {2:5d} | {3:5d} | {4:5d} | {5:5d} | {6:5d} | {7:5d} | {8:5d}".format(
+                    ts["name"],
+                    ts["number"],
+                    ts["played"],
+                    ts["wins"],
+                    ts["losses"],
+                    ts["goals_for"],
+                    ts["goals_against"],
+                    ts["goal_diff"],
+                    ts["points"],
+                )
+            )
 
 
 class TournamentScores:
@@ -139,9 +153,13 @@ class TournamentScores:
             self.table[bnum] = team_score
 
     def get_table(self):
-        return sorted(self.table.values(), reverse=True,
-                      key=lambda row: float(row["points"]) + float(row["goal_diff"]) / 100.0 + float(
-                          row["goals_for"]) / 10000.0)
+        return sorted(
+            self.table.values(),
+            reverse=True,
+            key=lambda row: float(row["points"])
+            + float(row["goal_diff"]) / 100.0
+            + float(row["goals_for"]) / 10000.0,
+        )
 
     def process(self, p, pairing_score):
         (side1, side2) = p

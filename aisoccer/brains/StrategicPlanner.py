@@ -1,5 +1,7 @@
-from aisoccer.abstractbrain import AbstractBrain
 import numpy as np
+
+from aisoccer.abstractbrain import AbstractBrain
+
 
 class StrategicPlanner(AbstractBrain):
     def __init__(self, name=None):
@@ -25,7 +27,9 @@ class StrategicPlanner(AbstractBrain):
     def plan_goalkeeper(self, player_pos):
         # Stay near the goal and block shots
         goal_position = np.array([0, 0])  # Assume goal is at (0, 0)
-        if np.linalg.norm(self.ball_pos - goal_position) < 5:  # Ball is close to the goal
+        if (
+            np.linalg.norm(self.ball_pos - goal_position) < 5
+        ):  # Ball is close to the goal
             return self.ball_pos - player_pos  # Move towards the ball
         return goal_position - player_pos  # Stay near the goal
 
