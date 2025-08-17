@@ -1,18 +1,18 @@
+from aisoccer.brains.AdaptiveChaser import AdaptiveChaser
 from aisoccer.brains.BehindAndTowards import BehindAndTowards
 from aisoccer.brains.DefendersAndAttackers import DefendersAndAttackers
 from aisoccer.brains.RandomWalk import RandomWalk
-from aisoccer.brains.SimpleBrain import SimpleBrain  # Add SimpleBrain
-from aisoccer.brains.AdaptiveChaser import AdaptiveChaser  # Corrected import path
-from aisoccer.brains.StrategicPlanner import StrategicPlanner  # Import StrategicPlanner
-from aisoccer.tournament import *
+from aisoccer.brains.SimpleBrain import SimpleBrain
+from aisoccer.brains.StrategicPlanner import StrategicPlanner
+from aisoccer.tournament import Tournament
 
 brains = []
-for i in range(4):  # Limit to 4 instances of each brain
+for i in range(4):
     brains.append(BehindAndTowards("BAT-" + str(i)))
     brains.append(DefendersAndAttackers("DAA-" + str(i)))
     brains.append(RandomWalk("RAND-" + str(i)))
-    brains.append(SimpleBrain("SIMPLE-" + str(i)))  # Add SimpleBrain instances
-    brains.append(AdaptiveChaser("ADAPTIVE-" + str(i)))  # Add AdaptiveChaser instances
+    brains.append(SimpleBrain("SIMPLE-" + str(i)))
+    brains.append(AdaptiveChaser("ADAPTIVE-" + str(i)))
     brains.append(
         StrategicPlanner("STRATEGIC-" + str(i))
     )  # Add StrategicPlanner instances
@@ -60,5 +60,6 @@ print(
 )
 for brain_type, score in sorted_grouped_scores:
     print(
-        f"{brain_type:<10} | {score['P']:>5} | {score['W']:>5} | {score['L']:>5} | {score['GF']:>5} | {score['GA']:>5} | {score['GD']:>5} | {score['POINTS']:>7}"
+        f"{brain_type:<10} | {score['P']:>5} | {score['W']:>5} | {score['L']:>5} | {score['GF']:>5} |"
+        f"{score['GA']:>5} | {score['GD']:>5} | {score['POINTS']:>7}"
     )

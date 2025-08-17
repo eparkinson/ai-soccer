@@ -43,7 +43,7 @@ class TestTournament(TestCase):
             self.assertEqual(3, score["played"])
 
     def test_sorted_table(self):
-        table = self.round_robin_tourney.get_table()
+        self.round_robin_tourney.get_table()
         previous_points = 99999
 
         for score in self.round_robin_tourney.get_table():

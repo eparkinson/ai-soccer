@@ -1,10 +1,12 @@
-import pytest
 import importlib
 import inspect
-import numpy as np
-from pathlib import Path
-from aisoccer.abstractbrain import AbstractBrain
 from abc import ABCMeta
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from aisoccer.abstractbrain import AbstractBrain
 from aisoccer.brains.AdaptiveChaser import AdaptiveChaser
 
 # Path to the brains folder
@@ -81,7 +83,7 @@ def test_brain_instantiation():
     """Test that all brain implementations can be instantiated."""
     for BrainClass in brain_classes:
         try:
-            brain = BrainClass()
+            BrainClass()
         except Exception as e:
             pytest.fail(f"Failed to instantiate {BrainClass.__name__}: {e}")
 

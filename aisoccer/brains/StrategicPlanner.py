@@ -1,5 +1,6 @@
-from aisoccer.abstractbrain import AbstractBrain
 import numpy as np
+
+from aisoccer.abstractbrain import AbstractBrain
 
 
 class StrategicPlanner(AbstractBrain):

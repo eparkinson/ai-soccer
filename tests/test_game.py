@@ -94,7 +94,7 @@ class TestGameRecording(TestCase):
             record_game=True,
         )
 
-        score = game.play()
+        game.play()
 
         self.assertTrue(game.move_df)
 
@@ -113,5 +113,5 @@ class TestGameRecording(TestCase):
             game_length=self.GAME_LENGTH,
             record_game=True,
         )
-        score = game.play()
+        game.play()
         game.save_game("test.csv")

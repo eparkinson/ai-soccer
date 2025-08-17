@@ -1,6 +1,8 @@
-from aisoccer.abstractbrain import *
-from aisoccer.constants import *
-from aisoccer.physics import *
+import numpy as np
+
+from aisoccer.abstractbrain import AbstractBrain
+from aisoccer.constants import Constants
+from aisoccer.physics import Body
 
 
 class Team:

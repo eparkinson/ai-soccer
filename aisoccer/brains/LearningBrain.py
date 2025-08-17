@@ -1,6 +1,8 @@
-from aisoccer.abstractbrain import AbstractBrain
 import random
+
 import numpy as np
+
+from aisoccer.abstractbrain import AbstractBrain
 
 
 class LearningBrain(AbstractBrain):

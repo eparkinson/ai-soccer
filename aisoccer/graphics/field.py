@@ -1,6 +1,6 @@
 import pyglet
 
-from aisoccer.game import *
+from aisoccer.game import Constants, GameResult
 
 
 class Field(pyglet.window.Window):

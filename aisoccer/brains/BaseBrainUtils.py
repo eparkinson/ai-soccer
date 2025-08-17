@@ -1,4 +1,9 @@
-from aisoccer.game import *
+from abc import ABC
+
+import numpy as np
+
+from aisoccer.abstractbrain import AbstractBrain
+from aisoccer.constants import Constants
 
 
 class BaseBrainUtils(AbstractBrain, ABC):

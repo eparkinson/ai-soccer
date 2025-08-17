@@ -1,9 +1,11 @@
 from enum import Enum
 from random import random
 
+import numpy as np
 import pandas
 
-from aisoccer.team import *
+from aisoccer.physics import Body, PhyState
+from aisoccer.team import Constants, Team
 
 
 class Game:

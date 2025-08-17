@@ -1,6 +1,8 @@
 from random import random
 
-from aisoccer.abstractbrain import *
+import numpy as np
+
+from aisoccer.abstractbrain import AbstractBrain
 
 
 class RandomWalk(AbstractBrain):

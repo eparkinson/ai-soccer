@@ -1,9 +1,8 @@
-from random import randint
-from random import random
+from random import randint, random
 
 import pyglet
 
-from aisoccer.physics import *
+from aisoccer.physics import Body, PhyState
 
 radius = 25
 speed = 20

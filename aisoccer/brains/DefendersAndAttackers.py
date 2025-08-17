@@ -1,4 +1,6 @@
-from aisoccer.brains.BehindAndTowards import *
+import numpy as np
+
+from aisoccer.brains.BaseBrainUtils import BaseBrainUtils
 
 
 class DefendersAndAttackers(BaseBrainUtils):
