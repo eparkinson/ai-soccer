@@ -24,16 +24,16 @@ class AbstractBrain(ABC):
     @final
     def move(
         self,
-        my_players_pos: np.array,
-        my_players_vel: np.array,
-        opp_players_pos: np.array,
-        opp_players_vel: np.array,
-        ball_pos: np.array,
-        ball_vel: np.array,
+        my_players_pos: np.ndarray,
+        my_players_vel: np.ndarray,
+        opp_players_pos: np.ndarray,
+        opp_players_vel: np.ndarray,
+        ball_pos: np.ndarray,
+        ball_vel: np.ndarray,
         my_score: int,
         opp_score: int,
         game_time: float,
-    ) -> np.array:
+    ) -> np.ndarray:
         """
         my_players_pos - a 5 x 2 matrix where the i'th row is the 2D position vector for friendly player i.
         my_players_vel - a 5 x 2 matrix where the i'th row is the 2D velocity vector for friendly player i.
@@ -68,7 +68,7 @@ class AbstractBrain(ABC):
         )
 
     @abstractmethod
-    def do_move(self, game_state=None) -> np.array:
+    def do_move(self, game_state=None) -> np.ndarray:
         pass
 
     def on_goal_scored(self, team: str, game_state: dict):
