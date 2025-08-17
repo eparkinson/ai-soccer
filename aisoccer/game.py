@@ -222,16 +222,19 @@ class Game:
             # ...other game state details...
         }
         for team in self.teams:
-            print(f"Team side: {team.side}, Scoring team: {scoring_team}")  # Debugging log
+            if not self.quiet_mode:
+                print(f"Team side: {team.side}, Scoring team: {scoring_team}")  # Debugging log
             if scoring_team == team.side:  # Correctly match scoring team with team side
                 reward = (1.0 / ticks_elapsed) * 1000  # Scale reward
                 team.brain.on_goal_scored(scoring_team, game_state)
-                print(f"Reward received: {reward:.2f} (Scoring team: {scoring_team})")
+                if not self.quiet_mode:
+                    print(f"Reward received: {reward:.2f} (Scoring team: {scoring_team})")
                 return  # Exit after processing the scoring team
             else:
                 penalty = (-1.0 / ticks_elapsed) * 1000  # Scale penalty
                 team.brain.on_goal_conceded(scoring_team, game_state)
-                print(f"Penalty received: {penalty:.2f} (Scoring team: {scoring_team})")
+                if not self.quiet_mode:
+                    print(f"Penalty received: {penalty:.2f} (Scoring team: {scoring_team})")
                 break  # Ensure only one penalty is printed
 
 

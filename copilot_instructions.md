@@ -64,16 +64,6 @@ poetry run pytest
 ```
 - Check for errors and iterate on your implementation.
 
-## Example Prompts for Copilot
-- "Create a new brain that moves all players toward the ball."
-- "Write a test for a brain that ensures it returns a `(5, 2)` array."
-- "Add a CLI flag to `demo_tournament.py` to limit worker processes."
-
-## Notes
-- Abstract classes like `BaseBrainUtils` are excluded from tests.
-- Follow PEP8 and add docstrings to new classes and methods.
-- Keep brain logic simple and focused on computing accelerations.
-
 
 
 ## Lessons Learned and Common Errors
