@@ -1,5 +1,3 @@
-from typing import List
-
 from aisoccer.abstractbrain import AbstractBrain
 from aisoccer.brains.AdaptiveChaser import AdaptiveChaser
 from aisoccer.brains.BehindAndTowards import BehindAndTowards
@@ -9,7 +7,7 @@ from aisoccer.brains.SimpleBrain import SimpleBrain
 from aisoccer.brains.StrategicPlanner import StrategicPlanner
 from aisoccer.tournament import Tournament
 
-brains: List[AbstractBrain] = []
+brains: list[AbstractBrain] = []
 for i in range(4):
     brains.append(BehindAndTowards("BAT-" + str(i)))
     brains.append(DefendersAndAttackers("DAA-" + str(i)))
