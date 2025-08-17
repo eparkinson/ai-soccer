@@ -2,7 +2,7 @@ from aisoccer.brains.BehindAndTowards import *
 
 
 class DefendersAndAttackers(BaseBrainUtils):
-    BASE_POS = [[100., 200.], [180., 600.], [600., 300.], [600., 500.]]
+    BASE_POS = [[100.0, 200.0], [180.0, 600.0], [600.0, 300.0], [600.0, 500.0]]
 
     def do_move(self) -> np.array:
 
@@ -36,4 +36,3 @@ class DefendersAndAttackers(BaseBrainUtils):
             result.append(acceleration)
 
         return np.array(result)
-

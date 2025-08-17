@@ -8,7 +8,7 @@ class Team:
     def __init__(self, brain: AbstractBrain, side):
         self.players = []
         self.brain = brain
-        self.side = 'blue' if side == 0 else 'red'  # Map side to 'blue' or 'red'
+        self.side = "blue" if side == 0 else "red"  # Map side to 'blue' or 'red'
         self.original_side = side  # Store the original side value (0 or 1)
 
         for i in range(Constants.NUM_PLAYERS):
@@ -23,7 +23,9 @@ class Team:
 
     def reset(self):
         for i in range(Constants.NUM_PLAYERS):
-            starting_position = Constants.STARTING_POSITIONS[self.original_side][i]  # Use original side
+            starting_position = Constants.STARTING_POSITIONS[self.original_side][
+                i
+            ]  # Use original side
             self.players[i].body.position = starting_position
             self.players[i].body.velocity = [0.0, 0.0]
 

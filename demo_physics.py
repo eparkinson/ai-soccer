@@ -15,7 +15,7 @@ state = PhyState(2000, 600)
 def setup():
     for i in range(50):
         body = Body(radius, [randint(0, 1999), randint(0, 599)])
-        body.kick([(random()-0.5)*speed, (random()-0.5)*speed])
+        body.kick([(random() - 0.5) * speed, (random() - 0.5) * speed])
         state.add_body(body)
 
 
@@ -27,7 +27,9 @@ def update(dt):
 def on_draw():
     window.clear()
     for b in state.bodies:
-        circle = pyglet.shapes.Circle(b.position[0], b.position[1], b.radius, color=(50, 225, 30))
+        circle = pyglet.shapes.Circle(
+            b.position[0], b.position[1], b.radius, color=(50, 225, 30)
+        )
         circle.draw()
 
 

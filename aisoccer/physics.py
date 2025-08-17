@@ -47,11 +47,14 @@ class Body(object):
         dist_squared = np.dot(pdiff, pdiff)
         overlap = dist_squared <= (self.radius + thing.radius) ** 2
 
-        dist2 = np.linalg.norm(np.subtract(
-            np.add(self.position, self.velocity),
-            np.add(thing.position, thing.velocity)))
+        dist2 = np.linalg.norm(
+            np.subtract(
+                np.add(self.position, self.velocity),
+                np.add(thing.position, thing.velocity),
+            )
+        )
 
-        towards = dist2 ** 2 < dist_squared
+        towards = dist2**2 < dist_squared
 
         return overlap and towards
 
@@ -72,10 +75,12 @@ class Body(object):
         dot_product = np.dot(vdiff, pdiff)
         norm_squared = np.inner(pdiff, pdiff)
 
-        mass1 = thing1.radius ** 2
-        mass2 = thing2.radius ** 2
+        mass1 = thing1.radius**2
+        mass2 = thing2.radius**2
 
-        new_vel = vel1 - (2*mass2 / (mass1 + mass2)) * (dot_product / norm_squared * pdiff)
+        new_vel = vel1 - (2 * mass2 / (mass1 + mass2)) * (
+            dot_product / norm_squared * pdiff
+        )
 
         thing1.velocity = new_vel
 

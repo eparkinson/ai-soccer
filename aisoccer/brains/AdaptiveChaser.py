@@ -1,6 +1,7 @@
 from aisoccer.abstractbrain import AbstractBrain
 import numpy as np
 
+
 class AdaptiveChaser(AbstractBrain):
     def __init__(self, name=None):
         super().__init__()
