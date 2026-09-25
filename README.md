@@ -6,38 +6,55 @@ Physics based, soccer game sandbox to pit AI agents against each other
 ```shell
 git clone https://github.com/eparkinson/ai-soccer.git
 cd ai-soccer
-pip install -r requirements.txt
-python demo_game.py
+poetry install          # or: pip install -e .
+poetry run python demo_game.py
 ```
 
-This sets up a game between two very basic agents (or 'brains') - DefendersAndAttackers2 and BehindAndTowards
+This sets up a game between two simple heuristic brains, DefendersAndAttackers and SimpleBrain.
 
 ```shell
-python demo_nographics_game.py
+poetry run python demo_nographics_game.py
 ```
 
-This sets up a game without any graphics - perfect for quickly pitting two brains against each other to see the score without having to watch the game visually.
+This plays a game without any graphics - perfect for quickly pitting two brains against each other to see the score without having to watch the game visually.
 
 ## Example game
 https://www.youtube.com/watch?v=YipEvWC1kt4
 
-This pits two simple heuristic algorithms against each other.
+This pits two simple heuristic algorithms against each other. (The video predates the goal mouths and posts.)
 
-BehindAndTowards (Red): Employs an extremely simple (yet surprisingly simple) strategy of getting behind the ball and then pushing towards the goal.
+BehindAndTowards (Red): Employs an extremely simple (yet surprisingly effective) strategy of getting behind the ball and then pushing towards the goal.
 
-AttackersAndDefenders (Blue): Employs a more complicated strategy with defenders hanging back waiting for the ball and more aggressive attackers attacking the ball.
+DefendersAndAttackers (Blue): Employs a more complicated strategy with defenders hanging back waiting for the ball and more aggressive attackers attacking the ball.
+
+## Rules of the game
+- Two teams of 5 players. Blue defends the left goal, red the right.
+- Each goal is a 300 pixel gap (the goal mouth) in the goal line, with a post at each end. Outside the mouth the goal line is a wall. A goal is scored when the whole ball crosses the line inside the mouth.
+- Every tick, each brain returns an acceleration for each of its players. Accelerations are capped at 1 and speeds at 5 (players) and 10 (ball).
+- Collisions are elastic, with mass proportional to radius squared. Posts do not move.
+- After a goal, play restarts from the kick-off positions with the ball given a small random nudge.
+
+All of these values live in `aisoccer/constants.py`.
+
+### Reproducible games
+Pass a `seed` to `Game` (or `Tournament`) and the game plays out identically every time. The seed drives the kick-off and each brain's `self.rng`, so brains that need randomness should use `self.rng` rather than the `random` module.
+
+```python
+from aisoccer.game import Game
+from aisoccer.brains.BehindAndTowards import BehindAndTowards
+from aisoccer.brains.RandomWalk import RandomWalk
+
+score = Game(RandomWalk(), BehindAndTowards(), quiet_mode=True, seed=42).play()
+```
 
 ## Roadmap
 Current status:
  - Prototype
 
 Next milestone: Alpha release
-- Unit tests (I know!)
-- At least one Reinforcement learning agent
-- Improved graphics for game. At the very least the score needs to be displayed
-- Publish as python package
-- (possibly) Improved physics engine - although a few glitches to exploit might be more interesting
-- (possibly) Improved physics engine performance. Important for faster training times.
+- At least one reinforcement learning agent (a Gym-style environment wrapper is the next step)
+- Publish as a Python package
+- (possibly) Further physics engine performance work. Important for faster training times.
 
 ## Contributing
 
@@ -49,71 +66,57 @@ See https://github.com/eparkinson/ai-soccer/blob/main/CODE_OF_CONDUCT.md
 
 ## AI Brains Overview
 
-### Existing Brains
+All brains live in `aisoccer/brains/`.
 
-1. **BehindAndTowards** (Red):
-   - Strategy: Gets behind the ball and pushes towards the goal.
-   - Simplicity: Extremely simple yet surprisingly effective.
+| Brain | Strategy |
+| --- | --- |
+| **BehindAndTowards** | Gets behind the ball, then pushes it towards the goal. Extremely simple, yet surprisingly effective. |
+| **DefendersAndAttackers** | Defenders hang back to protect the goal and intercept; attackers pursue the ball. |
+| **StrategicPlanner** | Fixed roles: a goalkeeper on the goal line, two defenders between ball and goal, a midfielder and an attacker. |
+| **AdaptiveChaser** | Chases the ball while level or behind, and falls back to defend when winning. |
+| **SimpleBrain** | Every player runs at the ball. A minimal, well-commented example to copy. |
+| **LearningBrain** | A placeholder learning brain: a coarse state-to-action table nudged by goal rewards. Not a real RL agent yet. |
+| **RandomWalk** | Moves randomly. A baseline for testing other brains. |
 
-2. **DefendersAndAttackers** (Blue):
-   - Strategy: Defenders hang back to protect the goal, while attackers aggressively pursue the ball.
-   - Complexity: More sophisticated than BehindAndTowards.
-
-3. **RandomWalk**:
-   - Strategy: Moves randomly on the field.
-   - Use Case: Baseline for testing other brains.
-
-### New Brains
-
-4. **LearningBrain**:
-   - Strategy: Uses reinforcement learning with a Q-table to adapt its actions based on rewards.
-   - Features: Can save and load its state for persistent learning.
-
-5. **Heuristic-Based Brain**:
-   - Strategy: Employs predefined rules and heuristics to make decisions.
-   - Simplicity: Focuses on interpretability and ease of debugging.
-
-6. **Genetic Algorithm Brain**:
-   - Strategy: Evolves strategies over generations using genetic algorithms.
-   - Features: Uses selection, crossover, and mutation to optimize performance.
+Heuristic-based and genetic algorithm brains are designed but not built yet; see the design documents below.
 
 ## Developer Guide: Implementing Your Own Brain
 
-1. **Create a New Brain Class**:
-   - Place your brain implementation in `aisoccer/brains/`.
-   - Inherit from the `BaseBrain` class in `BaseBrainUtils.py`.
+1. **Create a new brain class** in `aisoccer/brains/`. Inherit from `AbstractBrain`, or from `BaseBrainUtils` for helpers such as `run_towards`, `is_behind_ball` and `distance_to_ball`.
 
-2. **Implement Required Methods**:
-   - `act(self, state)`: Define how your brain decides actions based on the game state.
+2. **Implement `do_move(self)`**. It must return a 5 x 2 numpy array: one acceleration vector per player. Before it is called, the brain's attributes are filled in:
+   - `my_players_pos`, `my_players_vel`, `opp_players_pos`, `opp_players_vel` (5 x 2)
+   - `ball_pos`, `ball_vel` (2,)
+   - `my_score`, `opp_score`, `game_time` (0 to 1)
 
-3. **Test Your Brain**:
-   - Use `demo_game.py` or `demo_nographics_game.py` to test your brain against existing ones.
+   Everything is from your team's point of view: **you always defend the goal at x = 0 and attack the goal at x = 1799**, whichever colour you are playing.
 
-4. **Register Your Brain**:
-   - Add your brain to the appropriate demo scripts for testing.
+   ```python
+   import numpy as np
+
+   from aisoccer.abstractbrain import AbstractBrain
+
+
+   class MyBrain(AbstractBrain):
+       def do_move(self) -> np.ndarray:
+           return self.ball_pos - self.my_players_pos  # everyone chases the ball
+   ```
+
+3. **React to goals (optional)** by overriding `on_goal_scored(team, game_state)` and `on_goal_conceded(team, game_state)`. `game_state["ticks_elapsed"]` is the number of ticks since the last kick-off.
+
+4. **Test your brain**. `tests/test_brains.py` automatically checks every brain in `aisoccer/brains/` returns a valid move. Use `demo_game.py` or `demo_nographics_game.py` to watch or score it against existing brains.
 
 ## Testing Brains in a Tournament
 
-1. **Run a Tournament**:
-   ```shell
-   python demo_tournament.py
-   ```
-   - This pits multiple brains against each other in a round-robin format.
+```shell
+poetry run python demo_tournament.py
+```
 
-2. **Visualize a Tournament**:
-   - By default, `demo_tournament.py` includes graphical output to watch games.
+`Tournament(brains, rounds=0)` plays a round robin; `rounds=N` plays N Swiss rounds. Each pairing plays `legs` games (default 2, home and away) so both brains play each side. Games run in parallel, one process per CPU by default; pass `processes=1` to play them in the current process. Pass `seed` for a reproducible tournament.
 
-## Training the LearningBrain
+## Recording Games
 
-1. **Run Training**:
-   ```shell
-   python demo_learning_tournament.py
-   ```
-   - This script trains the `LearningBrain` by playing multiple games and updating its Q-table.
-
-2. **Save and Load State**:
-   - The `LearningBrain` automatically saves its state periodically during training.
-   - Use the saved state to resume training or for evaluation.
+`Game(..., record_game=True)` records one row per team per tick, from that team's point of view, including the capped accelerations each brain chose. `game.save_game("game.csv")` writes it to CSV, which is handy as training data for imitation learning.
 
 ## Design Documents
 
@@ -130,18 +133,22 @@ The following design documents provide detailed insights into various aspects of
 
 ## Brain Performance Summary
 
-The table below summarizes the performance scores of each brain based on the last full tournament results:
+Round robin between one copy of each brain, 10 legs per pairing (60 games each), `seed=2026`:
 
+| Brain | P | W | L | GF | GA | GD | Points |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| DefendersAndAttackers | 60 | 40 | 4 | 111 | 12 | 99 | 136 |
+| StrategicPlanner | 60 | 36 | 4 | 72 | 15 | 57 | 128 |
+| BehindAndTowards | 60 | 25 | 23 | 88 | 64 | 24 | 87 |
+| SimpleBrain | 60 | 24 | 29 | 73 | 78 | -5 | 79 |
+| AdaptiveChaser | 60 | 22 | 27 | 44 | 70 | -26 | 77 |
+| LearningBrain | 60 | 13 | 35 | 32 | 93 | -61 | 51 |
+| RandomWalk | 60 | 5 | 43 | 26 | 114 | -88 | 27 |
 
 ## Todo: quality improvements
 
-- **Add/expand unit tests** for brains and edge cases.
 - **Add error handling** for file I/O and invalid states.
 - **Add docstrings** to all public classes and methods.
-- **Centralize magic numbers/constants** in a config or constants module.
 - **Consider code coverage in CI** for better test quality tracking.
 - **Refactor code duplication** in brains and utilities for maintainability.
 - **Review type safety**: minimize use of `Any` and `type: ignore` where possible.
-- **Constructor consistency**: ensure all brain classes accept an optional `name` parameter.
-- **Method signatures**: double-check that all overridden methods match their base class signatures.
-- **Profile and optimize performance** if scaling up tournaments or training.

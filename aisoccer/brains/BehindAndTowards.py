@@ -4,8 +4,7 @@ from aisoccer.brains.BaseBrainUtils import BaseBrainUtils
 
 
 class BehindAndTowards(BaseBrainUtils):
-    def do_move(self, game_state=None) -> np.ndarray:
-
+    def do_move(self) -> np.ndarray:
         actions = [[0] * 2] * 5
         for i in range(5):
             if self.is_behind_ball(i):

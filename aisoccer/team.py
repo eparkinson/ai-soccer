@@ -17,33 +17,30 @@ class Team:
             starting_position = Constants.STARTING_POSITIONS[side][i]
             self.players.append(Player(side, starting_position))
 
-    def apply_move(self, move: np.ndarray):
-        self.brain.last_move = []  # type: ignore[attr-defined]
-        for i in range(len(self.players)):
-            normal_move = self.players[i].apply_move(move[i])
-            self.brain.last_move.append(normal_move)  # type: ignore[attr-defined]
+    def apply_move(self, move: np.ndarray) -> np.ndarray:
+        """Apply a 5 x 2 acceleration matrix and return the (magnitude-capped) accelerations used."""
+        # Guard the physics against brains that return NaN/inf.
+        move = np.nan_to_num(
+            np.asarray(move, dtype=float), nan=0.0, posinf=0.0, neginf=0.0
+        )
+        norms = np.linalg.norm(move, axis=1, keepdims=True)
+        normal_move = np.where(norms > 1, move / np.maximum(norms, 1), move)
+        for i, player in enumerate(self.players):
+            player.body.apply_acceleration(normal_move[i])
+        return normal_move
 
     def reset(self):
-        for i in range(Constants.NUM_PLAYERS):
-            starting_position = Constants.STARTING_POSITIONS[self.original_side][
-                i
-            ]  # Use original side
-            self.players[i].body.position = starting_position
-            self.players[i].body.velocity = [0.0, 0.0]
+        for i, player in enumerate(self.players):
+            player.body.position = np.array(
+                Constants.STARTING_POSITIONS[self.original_side][i], dtype=float
+            )
+            player.body.velocity = np.array([0.0, 0.0])
 
     def position_matrix(self):
-        result = []
-        for p in self.players:
-            position = [p.body.position[0], p.body.position[1]]
-            result.append(position)
-        return np.array(result)
+        return np.array([p.body.position for p in self.players], dtype=float)
 
     def velocity_matrix(self):
-        result = []
-        for p in self.players:
-            velocity = [p.body.velocity[0], p.body.velocity[1]]
-            result.append(velocity)
-        return np.array(result)
+        return np.array([p.body.velocity for p in self.players], dtype=float)
 
 
 class Player:

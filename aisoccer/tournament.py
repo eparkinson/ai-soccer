@@ -1,14 +1,37 @@
+import os
 from multiprocessing import Pool
+
+import numpy as np
 
 from aisoccer.constants import Constants
 from aisoccer.game import Game
 
 
 class Tournament:
-    def __init__(self, brains, game_length=Constants.GAME_LENGTH, rounds=0):
+    def __init__(
+        self,
+        brains,
+        game_length=Constants.GAME_LENGTH,
+        rounds=0,
+        legs=2,
+        seed=None,
+        processes=None,
+    ):
+        """
+        :param rounds: 0 for a round robin, otherwise the number of Swiss rounds.
+        :param legs: games per pairing. Legs alternate which brain plays blue, so the
+            default of 2 is a home and away fixture.
+        :param seed: seeds every game, making the whole tournament reproducible.
+        :param processes: worker processes (default: one per CPU). Use 1 to play games in
+            this process, e.g. when debugging. Games played in workers run on copies of
+            the brains, so anything a brain learns during a game is not kept.
+        """
         self.rounds = rounds
         self.brains = brains
         self.game_length = game_length
+        self.legs = legs
+        self.processes = processes or os.cpu_count() or 1
+        self.seed_sequence = np.random.SeedSequence(seed)
         self.tournament_scores = TournamentScores(self.brains)
 
     def start(self):
@@ -41,9 +64,11 @@ class Tournament:
                 self.play_pairings(round_pairings)
                 banned_pairings.extend(round_pairings)
 
+                # A bye counts as a draw for every leg
                 for player_num in round_byes:
-                    self.tournament_scores.table[player_num]["points"] += 1
-                    self.tournament_scores.table[player_num]["played"] += 1
+                    self.tournament_scores.table[player_num]["points"] += self.legs
+                    self.tournament_scores.table[player_num]["played"] += self.legs
+                    self.tournament_scores.table[player_num]["draws"] += self.legs
 
                 round += 1
 
@@ -87,18 +112,36 @@ class Tournament:
         return pairings, byes
 
     def play_pairings(self, pairings):
-        with Pool(48) as pool:
-            results = pool.map(self.play, pairings)
-        for idr, r in enumerate(results):
-            pairing_score = r
-            pairing = pairings[idr]
-            self.tournament_scores.process(pairing, pairing_score)
+        fixtures = self.fixtures(pairings)
+        if self.processes == 1:
+            results = [self.play(f) for f in fixtures]
+        else:
+            with Pool(min(self.processes, len(fixtures) or 1)) as pool:
+                results = pool.map(self.play, fixtures)
+        for (blue, red, _), score in zip(fixtures, results):
+            self.tournament_scores.process((blue, red), score)
 
-    def play(self, pairing):
-        blue_brain = self.brains[pairing[0]]
-        red_brain = self.brains[pairing[1]]
+    def fixtures(self, pairings):
+        """Expand pairings into (blue, red, seed) games, alternating sides each leg."""
+        fixtures = []
+        for first, second in pairings:
+            for leg in range(self.legs):
+                blue, red = (first, second) if leg % 2 == 0 else (second, first)
+                fixtures.append((blue, red))
+        seeds = [
+            int(s.generate_state(1)[0]) for s in self.seed_sequence.spawn(len(fixtures))
+        ]
+        return [(blue, red, seed) for (blue, red), seed in zip(fixtures, seeds)]
 
-        game = Game(blue_brain, red_brain, self.game_length, True)
+    def play(self, fixture):
+        blue, red, seed = fixture
+        game = Game(
+            self.brains[blue],
+            self.brains[red],
+            self.game_length,
+            quiet_mode=True,
+            seed=seed,
+        )
         score = game.play()
         return score["blue"], score["red"]
 

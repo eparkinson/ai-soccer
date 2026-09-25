@@ -1,11 +1,12 @@
+import math
 from enum import Enum
-from random import random
 
 import numpy as np
 import pandas
 
+from aisoccer.constants import Constants
 from aisoccer.physics import Body, PhyState
-from aisoccer.team import Constants, Team
+from aisoccer.team import Team
 
 
 class Game:
@@ -16,27 +17,54 @@ class Game:
         game_length=Constants.GAME_LENGTH,
         quiet_mode=False,
         record_game=False,
+        seed=None,
     ):
+        """
+        :param seed: seeds the kick-off and the brains' ``rng``. Two games with the same
+            brains and the same seed play out identically. ``None`` gives a random game.
+        """
         self.quiet_mode = quiet_mode
         self.game_length = game_length
+        self.rng = np.random.default_rng(seed)
         self.teams = [Team(blue_brain, 0), Team(red_brain, 1)]
-        self.state = PhyState(Constants.FIELD_LENGTH, Constants.FIELD_HEIGHT)
+        self.state = PhyState(
+            Constants.FIELD_LENGTH - 1,
+            Constants.FIELD_HEIGHT,
+            goal_depth=Constants.GOAL_DEPTH,
+            goal_y_min=Constants.GOAL_Y_MIN,
+            goal_y_max=Constants.GOAL_Y_MAX,
+        )
+        self.posts = [
+            Body(Constants.POST_RADIUS, [x, y], fixed=True)
+            for x in (
+                Constants.GOAL_DEPTH,
+                Constants.FIELD_LENGTH - 1 - Constants.GOAL_DEPTH,
+            )
+            for y in (Constants.GOAL_Y_MIN, Constants.GOAL_Y_MAX)
+        ]
         self.ball = None
         self.move_df = {}
         self.record_game = record_game
         self.score = {"red": 0, "blue": 0}
         self.last_goal_tick = 0  # Track the tick count of the last goal
 
+        self.seed_brains()
+
         if self.record_game:
             self.init_df()
 
         self.start()
 
+    def seed_brains(self):
+        """Give each brain its own generator derived from the game's, so seeded games are reproducible."""
+        for team, child in zip(self.teams, self.rng.spawn(len(self.teams))):
+            team.brain.rng = child
+
     def start(self):
         self.state.clear()
         self.ball = Ball(
             Constants.BALL_RADIUS,
-            Constants.FIELD_LENGTH / 2,
+            (Constants.FIELD_LENGTH - 1) / 2,
             Constants.FIELD_HEIGHT / 2,
         )
 
@@ -45,8 +73,11 @@ class Game:
                 self.state.add_body(player.body)
             team.reset()
 
+        for post in self.posts:
+            self.state.add_body(post)
+
         self.state.add_body(self.ball.body)
-        self.ball.body.velocity = np.array([random() - 0.5, random() - 0.5])
+        self.ball.body.velocity = self.rng.random(2) - 0.5
 
     def tick(self):
         if self.game_length != 0 and self.state.ticks >= self.game_length:
@@ -54,36 +85,10 @@ class Game:
                 print("Game Over!")
             return GameResult.end
         elif self.is_red_goal():
-            ticks_elapsed = self.state.ticks - self.last_goal_tick
-            self.last_goal_tick = self.state.ticks
-            self.score["red"] += 1
-            if not self.quiet_mode:
-                print("GOAL! Red!")
-                print(
-                    "Score: Blue {:2d} / Red {:2d}     (at {:3.2f}%)".format(
-                        self.score["blue"],
-                        self.score["red"],
-                        self.game_time_complete() * 100,
-                    )
-                )
-            self.notify_brains_goal("red", ticks_elapsed)
-            self.start()
+            self.goal("red")
             return GameResult.goal_red
         elif self.is_blue_goal():
-            ticks_elapsed = self.state.ticks - self.last_goal_tick
-            self.last_goal_tick = self.state.ticks
-            self.score["blue"] += 1
-            if not self.quiet_mode:
-                print("GOAL! Blue!")
-                print(
-                    "Score: Blue {:2d} / Red {:2d}     (at {:3.2f}%)".format(
-                        self.score["blue"],
-                        self.score["red"],
-                        self.game_time_complete() * 100,
-                    )
-                )
-            self.notify_brains_goal("blue", ticks_elapsed)
-            self.start()
+            self.goal("blue")
             return GameResult.goal_blue
         else:
             self.run_brains()
@@ -91,13 +96,38 @@ class Game:
             self.state.tick()
             return GameResult.nothing
 
+    def goal(self, scoring_team):
+        ticks_elapsed = self.state.ticks - self.last_goal_tick
+        self.last_goal_tick = self.state.ticks
+        self.score[scoring_team] += 1
+        if not self.quiet_mode:
+            print(f"GOAL! {scoring_team.capitalize()}!")
+            print(
+                "Score: Blue {:2d} / Red {:2d}     (at {:3.2f}%)".format(
+                    self.score["blue"],
+                    self.score["red"],
+                    self.game_time_complete() * 100,
+                )
+            )
+        self.notify_brains_goal(scoring_team, ticks_elapsed)
+        self.start()
+
     def is_red_goal(self):
-        return self.ball.body.position[0] < Constants.GOAL_WIDTH + Constants.BALL_RADIUS
+        """Red scores when the whole ball crosses blue's goal line (left) inside the goal mouth."""
+        x, y = self.ball.body.position
+        return x < Constants.GOAL_DEPTH - Constants.BALL_RADIUS and self.in_goal_mouth(
+            y
+        )
 
     def is_blue_goal(self):
-        return self.ball.body.position[0] > (Constants.FIELD_LENGTH - 1) - (
-            Constants.GOAL_WIDTH + Constants.BALL_RADIUS
-        )
+        """Blue scores when the whole ball crosses red's goal line (right) inside the goal mouth."""
+        x, y = self.ball.body.position
+        goal_line = Constants.FIELD_LENGTH - 1 - Constants.GOAL_DEPTH
+        return x > goal_line + Constants.BALL_RADIUS and self.in_goal_mouth(y)
+
+    @staticmethod
+    def in_goal_mouth(y):
+        return Constants.GOAL_Y_MIN < y < Constants.GOAL_Y_MAX
 
     def game_time_complete(self):
         if self.game_length == 0:
@@ -114,18 +144,15 @@ class Game:
         red_players_pos = red_team.position_matrix()
         red_players_vel = red_team.velocity_matrix()
 
-        ball_pos = self.ball.body.position
-        ball_vel = self.ball.body.velocity
+        ball_pos = self.ball.body.position.copy()
+        ball_vel = self.ball.body.velocity.copy()
 
         blue_score = self.score["blue"]
         red_score = self.score["red"]
 
         game_time = self.game_time_complete()
 
-        blue_brain = blue_team.brain
-        red_brain = red_team.brain
-
-        blue_move = blue_brain.move(
+        blue_view = (
             blue_players_pos,
             blue_players_vel,
             red_players_pos,
@@ -136,25 +163,8 @@ class Game:
             red_score,
             game_time,
         )
-        blue_team.apply_move(blue_move)
-
-        if self.record_game:
-            self.record_move(
-                blue_players_pos,
-                blue_players_vel,
-                red_players_pos,
-                red_players_vel,
-                ball_pos,
-                ball_vel,
-                blue_score,
-                red_score,
-                game_time,
-                blue_brain.last_move,
-            )
-
-        # TODO: translate red positions and velocities
-        #       so that both brains think that they are playing from left (0,y) to right (MAX_X,y)
-        red_move = red_brain.move(
+        # Red sees the field mirrored so that, like blue, it attacks from left to right.
+        red_view = (
             flip_pos(red_players_pos),
             flip_vel(red_players_vel),
             flip_pos(blue_players_pos),
@@ -165,23 +175,19 @@ class Game:
             blue_score,
             game_time,
         )
-        red_move = flip_acc(red_move)
-        red_team.apply_move(red_move)
+
+        blue_move = blue_team.apply_move(blue_team.brain.move(*blue_view))
+        red_move = red_team.apply_move(flip_acc(red_team.brain.move(*red_view)))
+
+        if self.record_game:
+            self.record_move("blue", *blue_view, blue_move)
+            self.record_move("red", *red_view, flip_acc(red_move))
 
     def limit_velocities(self):
-        ball_velocity = self.ball.body.normal_velocity()
-        if ball_velocity > Constants.MAX_BALL_VELOCITY:
-            self.ball.body.velocity = np.multiply(
-                self.ball.body.velocity, Constants.MAX_BALL_VELOCITY / ball_velocity
-            )
-
+        clamp_speed(self.ball.body, Constants.MAX_BALL_VELOCITY)
         for t in self.teams:
             for p in t.players:
-                player_velocity = p.body.normal_velocity()
-                if player_velocity > Constants.MAX_PLAYER_VELOCITY:
-                    p.body.velocity = np.multiply(
-                        p.body.velocity, Constants.MAX_PLAYER_VELOCITY / player_velocity
-                    )
+                clamp_speed(p.body, Constants.MAX_PLAYER_VELOCITY)
 
     def play(self):
         while True:
@@ -193,6 +199,7 @@ class Game:
 
     def record_move(
         self,
+        team,
         my_players_pos,
         my_players_vel,
         opp_players_pos,
@@ -204,6 +211,12 @@ class Game:
         game_time,
         moves,
     ):
+        """
+        Record one row per team per tick, from that team's point of view (red rows are
+        mirrored exactly as the red brain saw them). ``moves`` are the capped accelerations.
+        """
+        self.move_df["tick"].append(self.state.ticks)
+        self.move_df["team"].append(team)
         self.move_df["bp_x"].append(ball_pos[0])
         self.move_df["bp_y"].append(ball_pos[1])
         self.move_df["bv_x"].append(ball_vel[0])
@@ -212,7 +225,7 @@ class Game:
         self.move_df["os"].append(opp_score)
         self.move_df["gt"].append(game_time)
 
-        for i in range(5):
+        for i in range(Constants.NUM_PLAYERS):
             self.move_df["mpp_" + str(i) + "_x"].append(my_players_pos[i][0])
             self.move_df["mpp_" + str(i) + "_y"].append(my_players_pos[i][1])
 
@@ -229,7 +242,9 @@ class Game:
             self.move_df["m_" + str(i) + "_y"].append(moves[i][1])
 
     def init_df(self):
-        df = {
+        df: dict[str, list] = {
+            "tick": [],
+            "team": [],
             "bp_x": [],
             "bp_y": [],
             "bv_x": [],
@@ -239,7 +254,7 @@ class Game:
             "gt": [],
         }
 
-        for i in range(5):
+        for i in range(Constants.NUM_PLAYERS):
             df["mpp_" + str(i) + "_x"] = []
             df["mpp_" + str(i) + "_y"] = []
 
@@ -267,31 +282,13 @@ class Game:
         return panda_df.to_dict()
 
     def notify_brains_goal(self, scoring_team, ticks_elapsed):
-        game_state = {
-            "ticks_elapsed": ticks_elapsed,
-            # ...other game state details...
-        }
+        """Tell the scoring brain it scored and the other brain it conceded."""
+        game_state = {"ticks_elapsed": ticks_elapsed}
         for team in self.teams:
-            if not self.quiet_mode:
-                print(
-                    f"Team side: {team.side}, Scoring team: {scoring_team}"
-                )  # Debugging log
-            if scoring_team == team.side:  # Correctly match scoring team with team side
-                reward = (1.0 / ticks_elapsed) * 1000  # Scale reward
+            if team.side == scoring_team:
                 team.brain.on_goal_scored(scoring_team, game_state)
-                if not self.quiet_mode:
-                    print(
-                        f"Reward received: {reward:.2f} (Scoring team: {scoring_team})"
-                    )
-                return  # Exit after processing the scoring team
             else:
-                penalty = (-1.0 / ticks_elapsed) * 1000  # Scale penalty
                 team.brain.on_goal_conceded(scoring_team, game_state)
-                if not self.quiet_mode:
-                    print(
-                        f"Penalty received: {penalty:.2f} (Scoring team: {scoring_team})"
-                    )
-                break  # Ensure only one penalty is printed
 
 
 class Ball:
@@ -306,35 +303,27 @@ class GameResult(Enum):
     end = 3
 
 
+def clamp_speed(body, max_speed):
+    vx, vy = body.velocity
+    speed = math.hypot(vx, vy)
+    if speed > max_speed:
+        body.velocity = body.velocity * (max_speed / speed)
+
+
 def flip_pos(positions):
-    result = positions.copy()
-
-    if positions.ndim == 2:
-        for i in range(len(positions)):
-            result[i][0] = Constants.FIELD_LENGTH - 1 - positions[i][0]
-    elif positions.ndim == 1:
-        result[0] = Constants.FIELD_LENGTH - 1 - positions[0]
-
+    """Mirror positions left to right: x -> FIELD_LENGTH - 1 - x."""
+    result = np.array(positions, dtype=float)
+    result[..., 0] = Constants.FIELD_LENGTH - 1 - result[..., 0]
     return result
 
 
 def flip_vel(velocities):
-    result = velocities.copy()
-
-    if velocities.ndim == 2:
-        for i in range(len(velocities)):
-            result[i][0] = -1 * velocities[i][0]
-    elif velocities.ndim == 1:
-        result[0] = -1 * velocities[0]
-
+    """Mirror velocities left to right: vx -> -vx."""
+    result = np.array(velocities, dtype=float)
+    result[..., 0] = -result[..., 0]
     return result
 
 
-def flip_acc(accellerations):
-    result = accellerations.copy()
-
-    if accellerations.ndim == 2:
-        for i in range(len(accellerations)):
-            result[i][0] = -1 * accellerations[i][0]
-
-    return result
+def flip_acc(accelerations):
+    """Mirror accelerations left to right: ax -> -ax."""
+    return flip_vel(accelerations)

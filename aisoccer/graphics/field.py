@@ -1,6 +1,7 @@
 import pyglet
 
-from aisoccer.game import Constants, GameResult
+from aisoccer.constants import Constants
+from aisoccer.game import GameResult
 
 
 class Field(pyglet.window.Window):
@@ -12,6 +13,7 @@ class Field(pyglet.window.Window):
     BACKGROUND_COLOUR = (4, 16, 4)
     RED_GOAL_COLOUR = (64, 0, 0)
     BLUE_GOAL_COLOUR = (0, 0, 64)
+    POST_COLOUR = (255, 255, 255)
     STATUS_BAR_HEIGHT = 100
 
     def __init__(self, game):
@@ -62,19 +64,37 @@ class Field(pyglet.window.Window):
         )
         field.draw()
 
-        blue_goal = pyglet.shapes.Rectangle(
-            0, 0, 20, Constants.FIELD_HEIGHT - 1, Field.BLUE_GOAL_COLOUR
-        )
-        blue_goal.draw()
-
-        red_goal = pyglet.shapes.Rectangle(
-            Constants.FIELD_LENGTH - 21,
+        # Goals: the shaded box behind each goal mouth, plus the goal line either side of it
+        mouth_height = Constants.GOAL_Y_MAX - Constants.GOAL_Y_MIN
+        right_line = Constants.FIELD_LENGTH - 1 - Constants.GOAL_DEPTH
+        pyglet.shapes.Rectangle(
             0,
-            Constants.FIELD_LENGTH - 1,
-            Constants.FIELD_HEIGHT - 1,
+            Constants.GOAL_Y_MIN,
+            Constants.GOAL_DEPTH,
+            mouth_height,
+            Field.BLUE_GOAL_COLOUR,
+        ).draw()
+        pyglet.shapes.Rectangle(
+            right_line,
+            Constants.GOAL_Y_MIN,
+            Constants.GOAL_DEPTH,
+            mouth_height,
             Field.RED_GOAL_COLOUR,
-        )
-        red_goal.draw()
+        ).draw()
+
+        for x in (Constants.GOAL_DEPTH, right_line):
+            for y_from, y_to in (
+                (0, Constants.GOAL_Y_MIN),
+                (Constants.GOAL_Y_MAX, Constants.FIELD_HEIGHT),
+            ):
+                pyglet.shapes.Line(
+                    x, y_from, x, y_to, thickness=2, color=Field.FIELD_COLOUR
+                ).draw()
+
+        for post in self.game.posts:
+            pyglet.shapes.Circle(
+                post.position[0], post.position[1], post.radius, color=Field.POST_COLOUR
+            ).draw()
 
         center_dot = pyglet.shapes.Circle(
             Constants.FIELD_LENGTH / 2,

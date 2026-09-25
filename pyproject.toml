@@ -9,11 +9,9 @@ packages = [ { include = "aisoccer" } ]
 
 [tool.poetry.dependencies]
 python = "^3.12"
-numpy = "*"
+numpy = ">=1.25"  # Generator.spawn
 pyglet = "*"
 pandas = "*"
-matplotlib = "*"
-numba = "^0.61.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0"
