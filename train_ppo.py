@@ -34,21 +34,24 @@ import os
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "8")
 
 import argparse  # noqa: E402
+import json  # noqa: E402
 import time  # noqa: E402
 from multiprocessing import Pool  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 import numpy as np  # noqa: E402
 
+from aisoccer.abstractbrain import AbstractBrain  # noqa: E402
 from aisoccer.brains.AdaptiveChaser import AdaptiveChaser  # noqa: E402
 from aisoccer.brains.BehindAndTowards import BehindAndTowards  # noqa: E402
 from aisoccer.brains.DefendersAndAttackers import DefendersAndAttackers  # noqa: E402
-from aisoccer.brains.PPOBrain import ACT_DIM, OBS_DIM, PPOBrain, player_features  # noqa: E402
+from aisoccer.brains.GeneticBrain import GeneticBrain  # noqa: E402
+from aisoccer.brains.PPOBrain import ACT_DIM, OBS_DIM, PPOBrain, player_features  # noqa
 from aisoccer.brains.RandomWalk import RandomWalk  # noqa: E402
 from aisoccer.brains.SimpleBrain import SimpleBrain  # noqa: E402
 from aisoccer.brains.StrategicPlanner import StrategicPlanner  # noqa: E402
 from aisoccer.game import Game  # noqa: E402
-from aisoccer.ppo import PPO, gae  # noqa: E402
+from aisoccer.ppo import PPO, Adam, gae  # noqa: E402
 
 HEURISTICS = {
     "DefendersAndAttackers": DefendersAndAttackers,
@@ -62,7 +65,7 @@ HEURISTICS = {
 # variety of strategies rather than overfit one heuristic. Saved (policy only, with the
 # action repeat each was trained with) in aisoccer/brains/weights/history/.
 HISTORY_DIR = PPOBrain.WEIGHTS_FILE.parent / "history"
-PAST_VERSIONS = ["PPO-scratch", "PPO-clone", "PPO-it80", "PPO-it120"]
+PAST_VERSIONS = ["PPO-scratch", "PPO-clone", "PPO-it80", "PPO-it120", "PPO-first-it230"]
 
 # Every fixed opponent, for evaluation.
 OPPONENTS = list(HEURISTICS) + PAST_VERSIONS
@@ -81,9 +84,23 @@ OPPONENT_WEIGHTS = {
 
 
 def make_opponent(name):
+    """A heuristic brain, a saved PPOBrain version, or ("file:<path>") any weights file."""
     if name in HEURISTICS:
         return HEURISTICS[name]()
+    if name.startswith("file:"):
+        path = Path(name.removeprefix("file:"))
+        if path.suffix == ".json":
+            return GeneticBrain(path.stem, GeneticBrain.load(path))
+        return PPOBrain(path.stem, weights=PPOBrain.load_weights(path))
     return PPOBrain(name, weights=PPOBrain.load_weights(HISTORY_DIR / f"{name}.npz"))
+
+
+def save_atomic(path, save):
+    """Write via a temporary file so readers (e.g. league.py) never see a partial file."""
+    path = Path(path)
+    tmp = path.with_name(path.stem + ".tmp.npz")
+    save(tmp)
+    os.replace(tmp, path)
 
 
 RUN_DIR = Path("runs/ppo")
@@ -98,12 +115,12 @@ def log(message=""):
 
 def play_training_game(task):
     """Play one game in a worker and return the learner's (and self-play twin's) experience."""
-    weights, opponent, opponent_weights, seed, gamma = task
+    weights, opponent, opponent_weights, seed, gamma, reward = task
     rng = np.random.default_rng(seed)
-    learner = PPOBrain("learner", weights=weights, training=True)
+    learner = PPOBrain("learner", weights=weights, training=True, reward=reward)
 
     if opponent == "self":
-        other = PPOBrain("self", weights=weights, training=True)
+        other = PPOBrain("self", weights=weights, training=True, reward=reward)
     elif opponent == "snapshot":
         other = PPOBrain("snapshot", weights=opponent_weights, deterministic=False)
     else:
@@ -122,61 +139,67 @@ def play_training_game(task):
     return opponent, mine, theirs, trajectories
 
 
-class Demonstrator(DefendersAndAttackers):
-    """DefendersAndAttackers that records what it sees and does, for behaviour cloning."""
+def capped(action):
+    """The game caps accelerations at magnitude 1, so that is what to imitate."""
+    action = np.asarray(action, dtype=float)
+    norms = np.linalg.norm(action, axis=1, keepdims=True)
+    return np.where(norms > 1, action / np.maximum(norms, 1), action)
 
-    def __init__(self):
-        super().__init__()
+
+class Demonstrator(AbstractBrain):
+    """Plays as the teacher brain and records what it sees and does, for cloning."""
+
+    def __init__(self, teacher):
+        super().__init__(name="demonstrator")
+        self.teacher = make_opponent(teacher)
         self.ticks = 0
         self.obs: list[np.ndarray] = []
         self.act: list[np.ndarray] = []
 
     def do_move(self):
-        action = np.asarray(super().do_move(), dtype=float)
+        view = (
+            self.my_players_pos,
+            self.my_players_vel,
+            self.opp_players_pos,
+            self.opp_players_vel,
+            self.ball_pos,
+            self.ball_vel,
+            self.my_score,
+            self.opp_score,
+            self.game_time,
+        )
+        action = np.asarray(self.teacher.move(*view), dtype=float)
         self.ticks += 1
         # Record at the rate PPOBrain makes decisions.
         if self.ticks % PPOBrain.ACTION_REPEAT == 0:
-            self.obs.append(
-                player_features(
-                    self.my_players_pos,
-                    self.my_players_vel,
-                    self.opp_players_pos,
-                    self.opp_players_vel,
-                    self.ball_pos,
-                    self.ball_vel,
-                    self.my_score,
-                    self.opp_score,
-                    self.game_time,
-                )
-            )
-            # The game caps accelerations at magnitude 1, so that is what to imitate.
-            norms = np.linalg.norm(action, axis=1, keepdims=True)
-            self.act.append(np.where(norms > 1, action / np.maximum(norms, 1), action))
+            self.obs.append(player_features(*view))
+            self.act.append(capped(action))
         return action
 
 
-def play_demo_game(seed):
-    """DefendersAndAttackers vs a random heuristic; returns its (obs, actions) per player."""
+def play_demo_game(task):
+    """The teacher vs a random heuristic; returns its (obs, actions) per player."""
+    seed, teacher = task
     rng = np.random.default_rng(seed)
-    teacher = Demonstrator()
+    demonstrator = Demonstrator(teacher)
     other = HEURISTICS[str(rng.choice(list(HEURISTICS)))]()
-    blue, red = (teacher, other) if rng.random() < 0.5 else (other, teacher)
+    blue, red = (demonstrator, other) if rng.random() < 0.5 else (other, demonstrator)
     Game(blue, red, quiet_mode=True, seed=seed).play()
-    obs = np.array(teacher.obs, dtype=np.float32).reshape(-1, OBS_DIM)
-    act = np.array(teacher.act, dtype=np.float32).reshape(-1, ACT_DIM)
+    obs = np.array(demonstrator.obs, dtype=np.float32).reshape(-1, OBS_DIM)
+    act = np.array(demonstrator.act, dtype=np.float32).reshape(-1, ACT_DIM)
     return obs, act
 
 
 class DaggerStudent(PPOBrain):
     """
-    Plays with the cloned policy but records what DefendersAndAttackers would have done
-    in each position it reaches (DAgger), so cloning also learns to recover from the
-    student's own mistakes.
+    Plays with the cloned policy but records what the teacher would have done in each
+    position it reaches (DAgger), so cloning also learns to recover from the student's
+    own mistakes.
     """
 
-    def __init__(self, weights):
+    def __init__(self, weights, teacher):
         super().__init__("student", weights=weights)
-        self.teacher = DefendersAndAttackers()
+        self.teacher = make_opponent(teacher)
         self.obs: list[np.ndarray] = []
         self.act: list[np.ndarray] = []
 
@@ -193,17 +216,15 @@ class DaggerStudent(PPOBrain):
             self.opp_score,
             self.game_time,
         )
-        action = np.asarray(self.teacher.move(*view), dtype=float)
-        norms = np.linalg.norm(action, axis=1, keepdims=True)
         self.obs.append(player_features(*view))
-        self.act.append(np.where(norms > 1, action / np.maximum(norms, 1), action))
+        self.act.append(capped(self.teacher.move(*view)))
 
 
 def play_dagger_game(task):
     """The student vs a random heuristic; returns the teacher-labelled (obs, actions)."""
-    weights, seed = task
+    weights, seed, teacher = task
     rng = np.random.default_rng(seed)
-    student = DaggerStudent(weights)
+    student = DaggerStudent(weights, teacher)
     other = HEURISTICS[str(rng.choice(list(HEURISTICS)))]()
     blue, red = (student, other) if rng.random() < 0.5 else (other, student)
     Game(blue, red, quiet_mode=True, seed=seed).play()
@@ -331,6 +352,71 @@ def evaluate(pool, weights, games_per_opponent, seed=0):
     return float(ppo_points[worst])
 
 
+CONFIG_KEYS = {
+    "lr",
+    "gamma",
+    "lam",
+    "min_std",
+    "target_kl",
+    "self_play",
+    "snapshots",
+    "pool_share",
+    "reward",
+    "opponent_weights",
+}
+
+
+def apply_config(args, config):
+    """Override settings from a config dict (see --config)."""
+    unknown = set(config) - CONFIG_KEYS
+    if unknown:
+        raise ValueError(f"unknown config keys: {sorted(unknown)}")
+    for key, value in config.items():
+        setattr(args, key, value)
+
+
+def load_networks(ppo, weights):
+    """
+    Copy policy, value and noise from a weights dict into the learner, in place.
+    Returns False if the weights have no value network (e.g. a saved champion), in
+    which case the learner keeps its fresh critic, which then needs a warm-up.
+    """
+    ppo.policy.params[:] = [np.array(p, dtype=float) for p in weights["policy"]]
+    ppo.log_std[:] = weights["log_std"]
+    if "value" not in weights:
+        return False
+    ppo.value.params[:] = [np.array(p, dtype=float) for p in weights["value"]]
+    return True
+
+
+def adopt(ppo, args, iteration):
+    """
+    Population-based training hook: if league.py has left adopt.npz (and optionally
+    adopt.json) in the run directory, switch to those networks and settings, with fresh
+    optimisers. Returns True if it adopted.
+    """
+    weights_file = RUN_DIR / "adopt.npz"
+    if not weights_file.exists():
+        return False
+    config_file = RUN_DIR / "adopt.json"
+    load_networks(ppo, PPOBrain.load_weights(weights_file))
+    if config_file.exists():
+        apply_config(args, json.loads(config_file.read_text()))
+        config_file.unlink()
+    weights_file.unlink()
+    ppo.min_log_std = float(np.log(args.min_std))
+    ppo.target_kl = args.target_kl
+    np.maximum(ppo.log_std, ppo.min_log_std, out=ppo.log_std)
+    ppo.policy_opt = Adam(ppo.policy.params + [ppo.log_std], lr=args.lr)
+    ppo.value_opt = Adam(ppo.value.params, lr=args.lr)
+    log(f"ADOPTED new networks and settings at iteration {iteration}: {settings(args)}")
+    return True
+
+
+def settings(args):
+    return {k: getattr(args, k) for k in sorted(CONFIG_KEYS - {"opponent_weights"})}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--iterations", type=int, default=400)
@@ -358,6 +444,14 @@ def main():
         help="games of DefendersAndAttackers to imitate before PPO (0 to start from scratch)",
     )
     parser.add_argument("--bc-epochs", type=int, default=40)
+    parser.add_argument(
+        "--bc-teacher",
+        default="DefendersAndAttackers",
+        help="brain to imitate: a heuristic brain name or file:<weights path>",
+    )
+    parser.add_argument(
+        "--hidden", type=int, nargs="+", default=[128, 128], help="hidden layer sizes"
+    )
     parser.add_argument("--dagger-rounds", type=int, default=2)
     parser.add_argument("--dagger-games", type=int, default=100)
     parser.add_argument("--dagger-epochs", type=int, default=15)
@@ -385,14 +479,41 @@ def main():
         "best) instead of the latest",
     )
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--init-weights",
+        type=Path,
+        help="start from this checkpoint (policy, value and noise) instead of cloning",
+    )
+    parser.add_argument("--run-dir", type=Path, default=Path("runs/ppo"))
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="JSON overriding settings: lr, min_std, target_kl, self_play, snapshots, "
+        "pool_share, reward (weights), opponent_weights",
+    )
+    parser.add_argument(
+        "--pool-dir",
+        type=Path,
+        help="directory of opponent weights files (e.g. other learners in a league); "
+        "pool_share of games are played against a random one",
+    )
+    parser.add_argument("--pool-share", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
+    args.reward = None
+    args.opponent_weights = dict(OPPONENT_WEIGHTS)
+    if args.config:
+        apply_config(args, json.loads(args.config.read_text()))
 
+    global RUN_DIR, LOG_FILE
+    RUN_DIR = args.run_dir
+    LOG_FILE = RUN_DIR / "progress.log"
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(args.seed)
     ppo = PPO(
         OBS_DIM,
         ACT_DIM,
+        hidden=tuple(args.hidden),
         lr=args.lr,
         init_log_std=args.init_log_std,
         min_log_std=float(np.log(args.min_std)),
@@ -405,7 +526,7 @@ def main():
         ppo.policy.params[:] = state["policy"]
         ppo.value.params[:] = state["value"]
         ppo.log_std[:] = state["log_std"]
-        start_iteration = state["iteration"]
+        start_iteration = int(state["iteration"])
         log(f"Resumed from iteration {start_iteration}")
         if args.resume_weights:
             weights = PPOBrain.load_weights(args.resume_weights)
@@ -413,33 +534,41 @@ def main():
             ppo.value.params[:] = weights["value"]
             ppo.log_std[:] = weights["log_std"]
             log(f"  with the networks from {args.resume_weights}")
+    if args.init_weights:
+        log(f"Starting from the networks in {args.init_weights}")
+        if not load_networks(ppo, PPOBrain.load_weights(args.init_weights)):
+            args.value_warmup = max(args.value_warmup, 10)
+            log(
+                f"  (no value network there: training a fresh critic for {args.value_warmup} iterations first)"
+            )
     np.maximum(ppo.log_std, ppo.min_log_std, out=ppo.log_std)
 
     # Re-point the optimisers at the (possibly replaced) parameter arrays.
     ppo.policy_opt.params = ppo.policy.params + [ppo.log_std]
     ppo.value_opt.params = ppo.value.params
 
-    opponent_names = list(OPPONENT_WEIGHTS)
-    opponent_p = np.array([OPPONENT_WEIGHTS[n] for n in opponent_names], float)
-    opponent_p /= opponent_p.sum()
     best_score = -1.0
 
     log(
         f"Training PPOBrain: {args.games} games/iteration on {args.workers} workers, "
         f"obs {OBS_DIM}, action repeat {PPOBrain.ACTION_REPEAT}"
     )
+    log(f"Settings: {settings(args)}")
 
-    with Pool(args.workers) as pool:
+    with Pool(args.workers) as workers:
         best_weights = PPOBrain.load_weights(PPOBrain.WEIGHTS_FILE)
         if args.resume and best_weights is not None:
             log("\nBASELINE: the saved best weights")
-            best_score = evaluate(pool, best_weights, args.eval_games, seed=0)
+            best_score = evaluate(workers, best_weights, args.eval_games, seed=0)
             log()
 
-        cloned = not args.resume and args.bc_games > 0
+        cloned = not args.resume and not args.init_weights and args.bc_games > 0
         if cloned:
-            log(f"\nBEHAVIOUR CLONING DefendersAndAttackers from {args.bc_games} games")
-            demos = pool.map(play_demo_game, range(10**6, 10**6 + args.bc_games))
+            log(f"\nBEHAVIOUR CLONING {args.bc_teacher} from {args.bc_games} games")
+            demos = workers.map(
+                play_demo_game,
+                [(s, args.bc_teacher) for s in range(10**6, 10**6 + args.bc_games)],
+            )
             obs = np.concatenate([d[0] for d in demos]).astype(float)
             act = np.concatenate([d[1] for d in demos]).astype(float)
             del demos
@@ -450,9 +579,10 @@ def main():
             for r in range(args.dagger_rounds):
                 first = 2 * 10**6 + r * args.dagger_games
                 tasks = [
-                    (ppo.weights(), s) for s in range(first, first + args.dagger_games)
+                    (ppo.weights(), s, args.bc_teacher)
+                    for s in range(first, first + args.dagger_games)
                 ]
-                new = pool.map(play_dagger_game, tasks)
+                new = workers.map(play_dagger_game, tasks)
                 obs = np.concatenate([obs] + [d[0].astype(float) for d in new])
                 act = np.concatenate([act] + [d[1].astype(float) for d in new])
                 del new
@@ -463,7 +593,7 @@ def main():
                 )
             del obs, act
             log("\nEVALUATION of the cloned policy:")
-            best_score = evaluate(pool, ppo.weights(), args.eval_games, seed=0)
+            best_score = evaluate(workers, ppo.weights(), args.eval_games, seed=0)
             PPOBrain.save_weights(PPOBrain.WEIGHTS_FILE, ppo.weights())
             log()
 
@@ -473,25 +603,43 @@ def main():
             start_iteration + 1, start_iteration + args.iterations + 1
         ):
             started = time.time()
+            if adopt(ppo, args, iteration):
+                league = [ppo.weights()]
             # Linearly decay the learning rate to 10% over the run.
             progress = (iteration - start_iteration - 1) / args.iterations
             ppo.set_lr(args.lr * (1.0 - 0.9 * progress))
             weights = ppo.weights()
 
+            opponent_names = list(args.opponent_weights)
+            opponent_p = np.array(
+                [args.opponent_weights[n] for n in opponent_names], float
+            )
+            opponent_p /= opponent_p.sum()
+            pool = sorted(args.pool_dir.glob("*")) if args.pool_dir else []
+            pool = [
+                p
+                for p in pool
+                if p.suffix in (".npz", ".json") and ".tmp" not in p.name
+            ]
+
             tasks = []
             for _ in range(args.games):
                 roll = rng.random()
                 seed = int(rng.integers(2**31))
+                task_end = (seed, args.gamma, args.reward)
                 if roll < args.self_play:
-                    tasks.append((weights, "self", None, seed, args.gamma))
+                    tasks.append((weights, "self", None, *task_end))
                 elif roll < args.self_play + args.snapshots:
                     snap = league[rng.integers(len(league))]
-                    tasks.append((weights, "snapshot", snap, seed, args.gamma))
+                    tasks.append((weights, "snapshot", snap, *task_end))
+                elif pool and roll < args.self_play + args.snapshots + args.pool_share:
+                    opp = "file:" + str(pool[rng.integers(len(pool))])
+                    tasks.append((weights, opp, None, *task_end))
                 else:
                     opp = str(rng.choice(opponent_names, p=opponent_p))
-                    tasks.append((weights, opp, None, seed, args.gamma))
+                    tasks.append((weights, opp, None, *task_end))
 
-            outcomes = pool.map(play_training_game, tasks)
+            outcomes = workers.map(play_training_game, tasks)
             trajectories = [t for o in outcomes for t in o[3]]
             batch = build_batch(trajectories, args.gamma, args.lam)
             played = time.time() - started
@@ -515,11 +663,19 @@ def main():
                 league.append(ppo.weights())
 
             state = dict(ppo.weights(), iteration=iteration)
-            np.savez(RUN_DIR / "latest.npz", state=np.array(state, dtype=object))
+            save_atomic(
+                RUN_DIR / "latest.npz",
+                lambda p: np.savez(p, state=np.array(state, dtype=object)),
+            )
+            # The current networks as a plain weights file, e.g. for league.py.
+            save_atomic(
+                RUN_DIR / "policy.npz",
+                lambda p: PPOBrain.save_weights(p, ppo.weights()),
+            )
 
-            if iteration % args.eval_every == 0:
+            if args.eval_every and iteration % args.eval_every == 0:
                 log(f"\nEVALUATION after iteration {iteration} (deterministic policy):")
-                score = evaluate(pool, ppo.weights(), args.eval_games)
+                score = evaluate(workers, ppo.weights(), args.eval_games)
                 PPOBrain.save_weights(RUN_DIR / f"it{iteration:04d}.npz", ppo.weights())
                 if score > best_score:
                     best_score = score

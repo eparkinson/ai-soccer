@@ -74,29 +74,77 @@ OBS_DIM = 54
 ACT_DIM = 2
 
 
-def shaping_potential(my_pos, opp_pos, ball_pos):
-    """
-    Potential for reward shaping. It is higher when:
+# Training reward: goals are worth +/-"goal"; the other entries weight the terms of the
+# shaping potential below. A goal is worth several times the largest shaping swing.
+DEFAULT_REWARD = {"goal": 2.0, "progress": 0.3, "control": 0.15, "chase": 0.1}
+CONTROL_SCALE = 100.0  # pixels: how much closer to the ball counts as control
+TYPICAL_SPREAD = 300.0  # pixels: a typical mean distance between teammates
 
-    - the ball is further up the field (progress towards their goal),
-    - we control the ball: our nearest player is closer to it than theirs, so winning
-      the ball or passing it forward to a teammate raises it and losing it lowers it,
-    - our nearest player is close to the ball.
+
+def potential_terms(my_pos, opp_pos, ball_pos, ball_vel=(0.0, 0.0)):
+    """
+    The terms of the shaping potential, each roughly in -1 .. 1:
+
+    - progress: the ball is further up the field (towards their goal),
+    - control: our nearest player is closer to the ball than theirs, so winning the
+      ball or passing it forward to a teammate raises it and losing it lowers it,
+    - chase: our nearest player is close to the ball,
+    - final_third: the ball is deep in their half (0 outside their final third),
+    - shot: the ball is heading into their goal mouth at speed, more so when close,
+    - spread: our players are spread out rather than bunched.
+
+    The last three come from analyse_stats.py: within a matchup, shots, the ball in
+    the final third and team spread go with winning games.
+    """
+    my_pos = np.asarray(my_pos, dtype=float)
+    ball_pos = np.asarray(ball_pos, dtype=float)
+    ball_vel = np.asarray(ball_vel, dtype=float)
+    ours = np.linalg.norm(my_pos - ball_pos, axis=1).min()
+    theirs = np.linalg.norm(np.asarray(opp_pos) - ball_pos, axis=1).min()
+
+    goal_line = L - 1 - Constants.GOAL_DEPTH
+    shot = 0.0
+    if ball_vel[0] > 0:
+        y_at_line = ball_pos[1] + ball_vel[1] * (goal_line - ball_pos[0]) / ball_vel[0]
+        if Constants.GOAL_Y_MIN < y_at_line < Constants.GOAL_Y_MAX:
+            closeness = 1.0 - np.clip((goal_line - ball_pos[0]) / L, 0.0, 1.0)
+            shot = min(ball_vel[0] / Constants.MAX_BALL_VELOCITY, 1.0) * closeness
+
+    pairs = np.linalg.norm(my_pos[:, None, :] - my_pos[None, :, :], axis=2)
+    n = len(my_pos)
+    spread = pairs.sum() / (n * (n - 1))
+
+    return {
+        "progress": (ball_pos[0] / L - 0.5) * 2,  # -1 at our goal, +1 at theirs
+        "control": np.tanh((theirs - ours) / CONTROL_SCALE),
+        "chase": -ours / L,
+        "final_third": float(np.clip((ball_pos[0] - 2 * L / 3) / (L / 3), 0.0, 1.0)),
+        "shot": shot,
+        "spread": float(np.clip(spread / TYPICAL_SPREAD - 1.0, -1.0, 1.0)),
+    }
+
+
+def shaping_potential(
+    my_pos, opp_pos, ball_pos, reward=DEFAULT_REWARD, ball_vel=(0.0, 0.0)
+):
+    """
+    Potential for reward shaping: the reward-weighted sum of ``potential_terms``.
 
     The reward is the change in this potential, so it cannot be farmed: moving the ball
     back and forth, or passing in circles, gives back exactly what it gained. Shaping of
     this form speeds up learning without changing which policy is best.
     """
-    ball_pos = np.asarray(ball_pos, dtype=float)
-    ball_progress = (ball_pos[0] / L - 0.5) * 2  # -1 at our goal, +1 at theirs
-    ours = np.linalg.norm(np.asarray(my_pos) - ball_pos, axis=1).min()
-    theirs = np.linalg.norm(np.asarray(opp_pos) - ball_pos, axis=1).min()
-    control = np.tanh((theirs - ours) / PPOBrain.CONTROL_SCALE)  # -1 .. +1
-    return (
-        PPOBrain.BALL_PROGRESS_WEIGHT * ball_progress
-        + PPOBrain.CONTROL_WEIGHT * control
-        - PPOBrain.CHASE_WEIGHT * ours / L
-    )
+    terms = potential_terms(my_pos, opp_pos, ball_pos, ball_vel)
+    return sum(reward.get(name, 0.0) * value for name, value in terms.items())
+
+
+def network(params):
+    """An MLP holding these parameters; its layer sizes are read from their shapes."""
+    params = [np.asarray(p, dtype=float) for p in params]
+    sizes = [params[0].shape[0]] + [w.shape[1] for w in params[0::2]]
+    net = MLP(sizes, np.random.default_rng(0))
+    net.params = params
+    return net
 
 
 class PPOBrain(AbstractBrain):
@@ -114,40 +162,43 @@ class PPOBrain(AbstractBrain):
     ACTION_REPEAT = 2
     WEIGHTS_FILE = Path(__file__).parent / "weights" / "PPOBrain.npz"
 
-    # Training reward: +2 per goal scored, -2 per goal conceded, plus shaping (see
-    # shaping_potential). A goal is worth several times the largest shaping swing.
-    GOAL_REWARD = 2.0
-    BALL_PROGRESS_WEIGHT = 0.3
-    CONTROL_WEIGHT = 0.15
-    CONTROL_SCALE = 100.0  # pixels: how much closer to the ball counts as control
-    CHASE_WEIGHT = 0.1
-
-    def __init__(self, name=None, weights=None, deterministic=True, training=False):
+    def __init__(
+        self, name=None, weights=None, deterministic=True, training=False, reward=None
+    ):
         """
         :param weights: dict with "policy" (and for training "value") parameter lists
-            and "log_std". Defaults to the saved weights file.
+            and "log_std". Defaults to the saved weights file. A mixed team (see
+            coach.py) also has "role_policies": one policy parameter list per player
+            role, so each player can come from a different trained brain.
         :param deterministic: act with the policy's mean rather than sampling.
         :param training: sample actions and record a trajectory for PPO.
+        :param reward: training reward weights, overriding ``DEFAULT_REWARD``.
         """
         super().__init__(name=name)
         if weights is None:
             weights = self.load_weights(self.WEIGHTS_FILE)
         self.policy = MLP([OBS_DIM, 128, 128, ACT_DIM], np.random.default_rng(0), 0.01)
         if weights is not None:
-            self.policy.params = [np.asarray(p, dtype=float) for p in weights["policy"]]
+            self.policy = network(weights["policy"])
             self.log_std = np.asarray(weights["log_std"], dtype=float)
         else:
             self.log_std = np.full(ACT_DIM, -0.5)
+        self.role_policies = None
+        if weights is not None and weights.get("role_policies"):
+            self.role_policies = []
+            self.role_policies = [
+                network(params) for params in weights["role_policies"]
+            ]
         # Older saved versions may have been trained with a different action repeat.
         self.action_repeat = int(
             (weights or {}).get("action_repeat", self.ACTION_REPEAT)
         )
         self.value = None
         if training:
-            self.value = MLP([OBS_DIM, 128, 128, 1])
-            self.value.params = [np.asarray(p, dtype=float) for p in weights["value"]]
+            self.value = network(weights["value"])
         self.deterministic = deterministic and not training
         self.training = training
+        self.reward = {**DEFAULT_REWARD, **(reward or {})}
         self.ticks_until_decision = 0
         self.action = np.zeros((NUM, ACT_DIM))
         self.trajectory: dict[str, list] = {
@@ -166,6 +217,10 @@ class PPOBrain(AbstractBrain):
         }
         if "action_repeat" in data.files:
             weights["action_repeat"] = int(data["action_repeat"])
+        if "role0_policy_0" in data.files:
+            weights["role_policies"] = [
+                [data[f"role{r}_policy_{i}"] for i in range(n)] for r in range(NUM)
+            ]
         n_value = len([k for k in data.files if k.startswith("value_")])
         if n_value:
             weights["value"] = [data[f"value_{i}"] for i in range(n_value)]
@@ -175,6 +230,8 @@ class PPOBrain(AbstractBrain):
     def save_weights(path, weights):
         arrays = {f"policy_{i}": p for i, p in enumerate(weights["policy"])}
         arrays.update({f"value_{i}": p for i, p in enumerate(weights.get("value", []))})
+        for r, params in enumerate(weights.get("role_policies") or []):
+            arrays.update({f"role{r}_policy_{i}": p for i, p in enumerate(params)})
         arrays["log_std"] = weights["log_std"]
         arrays["action_repeat"] = np.array(
             weights.get("action_repeat", PPOBrain.ACTION_REPEAT)
@@ -201,7 +258,12 @@ class PPOBrain(AbstractBrain):
             self.opp_score,
             self.game_time,
         )
-        mean = self.policy(obs)
+        if self.role_policies:
+            mean = np.stack(
+                [net(obs[[r]])[0] for r, net in enumerate(self.role_policies)]
+            )
+        else:
+            mean = self.policy(obs)
         if self.deterministic:
             self.action = mean
             return
@@ -216,16 +278,20 @@ class PPOBrain(AbstractBrain):
             t["val"].append(self.value(obs)[:, 0])
             t["phi"].append(
                 shaping_potential(
-                    self.my_players_pos, self.opp_players_pos, self.ball_pos
+                    self.my_players_pos,
+                    self.opp_players_pos,
+                    self.ball_pos,
+                    self.reward,
+                    self.ball_vel,
                 )
             )
             t["goal"].append(0.0)
 
     def on_goal_scored(self, team, game_state):
-        self.goal(self.GOAL_REWARD)
+        self.goal(self.reward["goal"])
 
     def on_goal_conceded(self, team, game_state):
-        self.goal(-self.GOAL_REWARD)
+        self.goal(-self.reward["goal"])
 
     def goal(self, reward):
         # Everyone is back at kick-off, so pick a fresh action straight away.

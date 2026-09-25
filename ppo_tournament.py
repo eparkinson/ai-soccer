@@ -45,12 +45,26 @@ def main():
     args = parser.parse_args()
 
     history = PPOBrain.WEIGHTS_FILE.parent / "history"
+    current = PPOBrain()
     past_versions = [
         PPOBrain(path.stem, weights=PPOBrain.load_weights(path))
         for path in sorted(history.glob("*.npz"))
     ]
+    # Skip saved copies of the brain under test: a brain cannot beat itself.
+    past_versions = [
+        brain
+        for brain in past_versions
+        if not (
+            brain.role_policies is None
+            and current.role_policies is None
+            and all(
+                np.shape(a) == np.shape(b) and np.array_equal(a, b)
+                for a, b in zip(brain.policy.params, current.policy.params)
+            )
+        )
+    ]
     brains = [
-        PPOBrain(),
+        current,
         *past_versions,
         DefendersAndAttackers(),
         BehindAndTowards(),

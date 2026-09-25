@@ -75,7 +75,8 @@ All brains live in `aisoccer/brains/`.
 | **StrategicPlanner** | Fixed roles: a goalkeeper on the goal line, two defenders between ball and goal, a midfielder and an attacker. |
 | **AdaptiveChaser** | Chases the ball while level or behind, and falls back to defend when winning. |
 | **SimpleBrain** | Every player runs at the ball. A minimal, well-commented example to copy. |
-| **PPOBrain** | A neural network trained with reinforcement learning (PPO). The strongest brain; see [PPOBrain](#ppobrain-reinforcement-learning) below. |
+| **PPOBrain** | A neural network trained with reinforcement learning (PPO). The strongest brain; see [PPOBrain](#ppobrain-reinforcement-learning) and [League Training](#league-training-many-approaches-at-once) below. |
+| **GeneticBrain** | A heuristic whose behaviour is set by an evolvable chromosome, trained by a genetic algorithm (`evolve.py`). |
 | **LearningBrain** | A placeholder learning brain: a coarse state-to-action table nudged by goal rewards. Not a real RL agent yet. |
 | **RandomWalk** | Moves randomly. A baseline for testing other brains. |
 
@@ -177,6 +178,23 @@ This is why the training evaluations use 48-144 games per opponent and why `ppo_
 | LearningBrain | 0.50 +/- 0.03 | 332 | 2301 | -4817 |
 
 PPOBrain tops the table with significantly more points per game than any other brain, and is significantly stronger head to head than every brain except DefendersAndAttackers. Against DefendersAndAttackers it is level: a goal difference of +0.08 +/- 0.09 per game in PPOBrain's favour (66 wins, 181 draws, 53 losses), not yet significant.
+
+## League Training: Many Approaches at Once
+
+`league.py` trains several different approaches side by side and judges them in a shared league, so a better idea can win whichever approach it comes from:
+
+- **PPO learners** (`train_ppo.py` processes), each a different bet: steady settings, an explorer (more noise, faster learning, varied opponents), a reward with statistics-based terms, a bigger network distilled from the champion, a long horizon, goals-only reward, and a fresh start from the cloned policy.
+- **The coach** (`coach.py`): a mixed team where each player role uses the policy of whichever trained brain plays that role best. Swaps are kept only if the new team beats the old one head to head.
+- **The GA** (`evolve.py`): a genetic algorithm evolving `GeneticBrain`, an interpretable heuristic with 8 genes per player role (see [the design](docs/genetic_algorithm_learning.md)).
+
+Every league round pauses training and plays a 5-round Swiss tournament of all entrants plus the fixed field (the stronger heuristics and every saved PPOBrain version), then a two-stage head to head of every entrant against the current champion. An entrant that beats the champion significantly (and scores at least as well in the Swiss) becomes the new champion (`aisoccer/brains/weights/history/PPO-champ-N.npz` and `PPOBrain.npz`). Learners that are significantly behind and not improving adopt the leader's networks with mutated settings (population-based training), but keep what defines their approach.
+
+```shell
+poetry run python league.py --hours 8
+tail -f runs/league/progress.log
+```
+
+`aisoccer/stats.py` records per-game team statistics (possession, territory, shots, spread, passing), and `analyse_stats.py` relates them to winning. Within a matchup, shots and the ball in the opponent's final third go with winning, while being busy on the ball goes with losing, largely because that happens when defending.
 
 ## Design Documents
 

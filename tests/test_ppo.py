@@ -193,3 +193,63 @@ def test_exploration_noise_never_drops_below_floor():
     for _ in range(5):
         ppo.update(obs, actions, logp, np.ones(64), np.zeros(64))
     assert np.all(np.exp(ppo.log_std) >= 0.25 - 1e-12)
+
+
+def test_new_potential_terms():
+    from aisoccer.brains.PPOBrain import potential_terms
+
+    bunched = np.array([[900.0, 400.0]] * 5) + np.arange(5)[:, None]
+    spread = np.array(
+        [
+            [300.0, 100.0],
+            [300.0, 700.0],
+            [900.0, 400.0],
+            [1300.0, 150.0],
+            [1300.0, 650.0],
+        ]
+    )
+    opp = np.array([[100.0, 100.0]] * 5)
+    deep = np.array([1600.0, 400.0])
+
+    assert (
+        potential_terms(spread, opp, deep)["spread"]
+        > potential_terms(bunched, opp, deep)["spread"]
+    )
+    assert potential_terms(spread, opp, deep)["final_third"] > 0
+    assert potential_terms(spread, opp, np.array([900.0, 400.0]))["final_third"] == 0
+    # Heading into the goal mouth is a shot; heading wide or away is not.
+    assert potential_terms(spread, opp, deep, np.array([8.0, 0.0]))["shot"] > 0
+    assert potential_terms(spread, opp, deep, np.array([8.0, 8.0]))["shot"] == 0
+    assert potential_terms(spread, opp, deep, np.array([-8.0, 0.0]))["shot"] == 0
+
+
+def test_mixed_team_uses_each_roles_policy(tmp_path):
+    from aisoccer.brains.PPOBrain import OBS_DIM
+
+    rng = np.random.default_rng(9)
+    sources = [PPO(OBS_DIM, 2, seed=s).weights() for s in range(5)]
+    mixed = {
+        "policy": sources[0]["policy"],
+        "log_std": sources[0]["log_std"],
+        "role_policies": [w["policy"] for w in sources],
+    }
+    path = tmp_path / "mixed.npz"
+    PPOBrain.save_weights(path, mixed)
+    brain = PPOBrain("mixed", weights=PPOBrain.load_weights(path))
+
+    view = (
+        rng.uniform(0, 800, (5, 2)),
+        rng.normal(size=(5, 2)),
+        rng.uniform(0, 800, (5, 2)),
+        rng.normal(size=(5, 2)),
+        np.array([900.0, 400.0]),
+        np.array([1.0, 0.0]),
+        0,
+        0,
+        0.3,
+    )
+    action = brain.move(*view)
+    obs = player_features(*view)
+    for r in range(5):
+        expected = PPOBrain("one", weights=sources[r]).policy(obs[[r]])[0]
+        assert np.allclose(action[r], expected)
