@@ -134,3 +134,4 @@ dmypy.json
 
 # Ignore copilot instructions
 copilot_instructions.md
+runs/

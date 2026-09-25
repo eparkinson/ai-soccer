@@ -75,6 +75,7 @@ All brains live in `aisoccer/brains/`.
 | **StrategicPlanner** | Fixed roles: a goalkeeper on the goal line, two defenders between ball and goal, a midfielder and an attacker. |
 | **AdaptiveChaser** | Chases the ball while level or behind, and falls back to defend when winning. |
 | **SimpleBrain** | Every player runs at the ball. A minimal, well-commented example to copy. |
+| **PPOBrain** | A neural network trained with reinforcement learning (PPO). The strongest brain; see [PPOBrain](#ppobrain-reinforcement-learning) below. |
 | **LearningBrain** | A placeholder learning brain: a coarse state-to-action table nudged by goal rewards. Not a real RL agent yet. |
 | **RandomWalk** | Moves randomly. A baseline for testing other brains. |
 
@@ -117,6 +118,65 @@ poetry run python demo_tournament.py
 ## Recording Games
 
 `Game(..., record_game=True)` records one row per team per tick, from that team's point of view, including the capped accelerations each brain chose. `game.save_game("game.csv")` writes it to CSV, which is handy as training data for imitation learning.
+
+## PPOBrain: Reinforcement Learning
+
+`PPOBrain` is a small neural network policy trained with Proximal Policy Optimisation (PPO), written in plain numpy (`aisoccer/ppo.py`). One network is shared by all five players: it takes one player's view of the game (its role, its own state, the ball, its teammates, and its opponents sorted by distance) and returns that player's acceleration. The brain picks a new action every 2 ticks. Trained weights are in `aisoccer/brains/weights/PPOBrain.npz`.
+
+```shell
+poetry run python demo_ppo_game.py     # watch PPOBrain (blue) play DefendersAndAttackers
+```
+
+### How it is trained
+
+`train_ppo.py` runs the whole pipeline on all CPU cores:
+
+1. **Behaviour cloning.** The network first imitates DefendersAndAttackers, then refines that with DAgger: the clone plays, and DefendersAndAttackers labels the positions the clone actually reaches. PPO from scratch plateaued well below the heuristic brains; starting from a clone, PPO starts level and improves from there.
+2. **Critic warm-up.** A few iterations train only the value network, so the first policy updates are not driven by an untrained critic.
+3. **PPO.** Each iteration plays 48 games in parallel and updates the policy. Opponents are a mix of the current policy (self-play), earlier snapshots, the heuristic brains, and earlier saved PPOBrain versions (`aisoccer/brains/weights/history/`). No single opponent dominates, so the policy has to beat a variety of strategies.
+
+The reward is +2 per goal scored and -2 per goal conceded, plus shaping for moving the ball up the field, controlling the ball (our nearest player closer to it than theirs), and getting to the ball. The shaping is potential-based: it rewards the *change* in a score of the position, so it cannot be farmed by moving the ball back and forth, and it does not change which policy is best.
+
+Updates stop early once the policy has moved a set distance (a KL target), and the exploration noise has a floor, which keeps training stable.
+
+```shell
+poetry run python train_ppo.py --iterations 400    # train from scratch (clone, then PPO)
+poetry run python train_ppo.py --resume            # continue from runs/ppo/latest.npz
+tail -f runs/ppo/progress.log                      # follow progress
+```
+
+Every 10 iterations the policy plays every fixed opponent, and each opponent's record against it is logged with 95% confidence intervals. The version with the best worst-case matchup is saved as the new `PPOBrain.npz`.
+
+### Measuring strength: games are noisy
+
+Goals are rare and random. Between the strongest brains there are only about 0.6 goals per 1800-tick game, goals arrive roughly as a Poisson process, and 55-65% of games are draws. So a handful of games proves nothing:
+
+- The scoring rate does not depend on game length (goal difference per 1800 ticks is the same in 1800- and 5400-tick games), so what matters is the total number of ticks played. More games and longer games carry the same information.
+- With 16 games, the 95% confidence interval on a goal difference is about +/-0.4 goals per game, several times the real gaps between the top brains.
+- Measuring a 0.1 goals per game difference reliably takes about 250-300 games per pairing.
+
+This is why the training evaluations use 48-144 games per opponent and why `ppo_tournament.py` plays 300 games per pairing. When one checkpoint is picked as the best of many evaluations, some of its apparent lead is luck, so the final check always uses fresh games.
+
+### Result
+
+`poetry run python ppo_tournament.py` plays a round robin of every brain, including earlier PPOBrain versions, with 300 games per pairing (3300 games per brain). Result for the committed weights, `seed=2026`:
+
+| Brain | Points per game (95% CI) | W | L | GD |
+| --- | ---: | ---: | ---: | ---: |
+| **PPOBrain** | **2.07 +/- 0.04** | 1913 | 289 | 3786 |
+| PPO-it120 (earlier version) | 2.00 +/- 0.04 | 1830 | 353 | 3589 |
+| DefendersAndAttackers | 1.97 +/- 0.04 | 1783 | 362 | 3093 |
+| PPO-it80 (earlier version) | 1.88 +/- 0.04 | 1694 | 486 | 2902 |
+| PPO-clone (before PPO) | 1.72 +/- 0.04 | 1523 | 657 | 2054 |
+| StrategicPlanner | 1.60 +/- 0.04 | 1286 | 597 | 1411 |
+| BehindAndTowards | 1.29 +/- 0.04 | 1153 | 1363 | -256 |
+| AdaptiveChaser | 1.04 +/- 0.04 | 942 | 1757 | -2348 |
+| SimpleBrain | 0.91 +/- 0.04 | 785 | 1860 | -2232 |
+| PPO-scratch (PPO without cloning) | 0.80 +/- 0.04 | 607 | 1875 | -2511 |
+| RandomWalk | 0.51 +/- 0.03 | 338 | 2286 | -4671 |
+| LearningBrain | 0.50 +/- 0.03 | 332 | 2301 | -4817 |
+
+PPOBrain tops the table with significantly more points per game than any other brain, and is significantly stronger head to head than every brain except DefendersAndAttackers. Against DefendersAndAttackers it is level: a goal difference of +0.08 +/- 0.09 per game in PPOBrain's favour (66 wins, 181 draws, 53 losses), not yet significant.
 
 ## Design Documents
 
