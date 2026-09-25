@@ -14,12 +14,16 @@ class AbstractBrain(ABC):
         self.my_players_pos = None
         self.my_players_vel = None
         self.opp_players_pos = None
-        self.opp_players_pos = None
+        self.opp_players_vel = None
         self.ball_pos = None
         self.ball_vel = None
         self.my_score = None
         self.opp_score = None
         self.game_time = None
+
+        # Source of randomness for brains that need it. Game.seed_brains() replaces it
+        # with a generator derived from the game seed so seeded games are reproducible.
+        self.rng = np.random.default_rng()
 
     @final
     def move(
@@ -35,6 +39,10 @@ class AbstractBrain(ABC):
         game_time: float,
     ) -> np.ndarray:
         """
+        All positions and velocities are given from this brain's point of view: it always
+        defends the goal at x = 0 and attacks the goal at x = FIELD_LENGTH - 1, whichever
+        side of the field it is really playing on.
+
         my_players_pos - a 5 x 2 matrix where the i'th row is the 2D position vector for friendly player i.
         my_players_vel - a 5 x 2 matrix where the i'th row is the 2D velocity vector for friendly player i.
 
@@ -54,37 +62,33 @@ class AbstractBrain(ABC):
         self.my_players_pos = my_players_pos
         self.my_players_vel = my_players_vel
         self.opp_players_pos = opp_players_pos
-        self.opp_players_pos = opp_players_vel
+        self.opp_players_vel = opp_players_vel
         self.ball_pos = ball_pos
         self.ball_vel = ball_vel
         self.my_score = my_score
         self.opp_score = opp_score
         self.game_time = game_time
 
-        return (
-            self.do_move()
-            if "game_state" in self.do_move.__code__.co_varnames
-            else self.do_move()
-        )
+        return self.do_move()
 
     @abstractmethod
-    def do_move(self, game_state=None) -> np.ndarray:
+    def do_move(self) -> np.ndarray:
         pass
 
     def on_goal_scored(self, team: str, game_state: dict):
         """
-        Callback triggered when a goal is scored.
+        Callback triggered when this brain's team scores.
 
-        :param team: The team that scored ('red' or 'blue').
-        :param game_state: The current game state as a dictionary.
+        :param team: The team that scored ('red' or 'blue'), i.e. this brain's team.
+        :param game_state: Details of the goal, e.g. ``ticks_elapsed`` since the last kick-off.
         """
         pass
 
     def on_goal_conceded(self, team: str, game_state: dict):
         """
-        Callback triggered when a goal is conceded.
+        Callback triggered when this brain's team concedes.
 
-        :param team: The team that conceded ('red' or 'blue').
-        :param game_state: The current game state as a dictionary.
+        :param team: The team that scored ('red' or 'blue'), i.e. the opponent.
+        :param game_state: Details of the goal, e.g. ``ticks_elapsed`` since the last kick-off.
         """
         pass

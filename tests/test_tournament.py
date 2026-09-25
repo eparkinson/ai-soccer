@@ -18,6 +18,7 @@ class TestTournament(TestCase):
             ],
             game_length=1000,
             rounds=0,
+            seed=1,
         )
         cls.round_robin_tourney.start()
 
@@ -31,16 +32,38 @@ class TestTournament(TestCase):
         for i in range(6):
             swiss_brains.append(RandomWalk("RW-" + str(i)))
 
-        cls.swiss_tourney = Tournament(swiss_brains, game_length=500, rounds=3)
+        cls.swiss_tourney = Tournament(swiss_brains, game_length=500, rounds=3, seed=1)
         cls.swiss_tourney.start()
 
     def test_round_robin(self):
+        # 2 opponents, home and away
         for score in self.round_robin_tourney.get_table():
-            self.assertEqual(2, score["played"])
+            self.assertEqual(4, score["played"])
 
     def test_swiss(self):
+        # 3 rounds, home and away
         for score in self.swiss_tourney.get_table():
-            self.assertEqual(3, score["played"])
+            self.assertEqual(6, score["played"])
+
+    def test_same_seed_gives_same_table(self):
+        brains = [
+            BehindAndTowards("anne"),
+            DefendersAndAttackers("bob"),
+            RandomWalk("charlie"),
+        ]
+        tables = []
+        for _ in range(2):
+            tourney = Tournament(brains, game_length=300, seed=7, processes=1)
+            tourney.start()
+            tables.append(tourney.get_table())
+        self.assertEqual(tables[0], tables[1])
+
+    def test_legs_alternate_sides(self):
+        tourney = Tournament([RandomWalk("a"), RandomWalk("b")], legs=3, seed=0)
+        fixtures = tourney.fixtures([(0, 1)])
+        self.assertEqual(
+            [(0, 1), (1, 0), (0, 1)], [(blue, red) for blue, red, _ in fixtures]
+        )
 
     def test_sorted_table(self):
         previous_points = 99999

@@ -1,15 +1,25 @@
 import numpy as np
 
 from aisoccer.abstractbrain import AbstractBrain
+from aisoccer.constants import Constants
 
 
 class StrategicPlanner(AbstractBrain):
-    def __init__(self, name=None):
-        super().__init__()
-        self.name = name  # Store the name if provided
+    """Fixed roles: goalkeeper, two defenders, a midfielder and an attacker."""
+
+    OWN_GOAL = np.array(
+        [Constants.GOAL_DEPTH + Constants.PLAYER_RADIUS, Constants.FIELD_HEIGHT / 2]
+    )
+    OPPONENT_GOAL = np.array([Constants.FIELD_LENGTH - 1, Constants.FIELD_HEIGHT / 2])
+    CENTRE = np.array([(Constants.FIELD_LENGTH - 1) / 2, Constants.FIELD_HEIGHT / 2])
+
+    # Distances (pixels) at which each role engages the ball
+    KEEPER_RANGE = 200
+    MIDFIELD_RANGE = 150
+    ATTACKER_RANGE = Constants.PLAYER_RADIUS + Constants.BALL_RADIUS + 10
 
     def do_move(self):
-        moves = np.zeros_like(self.my_players_pos)
+        moves = np.zeros_like(self.my_players_pos, dtype=float)
 
         # Assign roles dynamically based on game state
         for i, player_pos in enumerate(self.my_players_pos):
@@ -25,30 +35,33 @@ class StrategicPlanner(AbstractBrain):
         return moves
 
     def plan_goalkeeper(self, player_pos):
-        # Stay near the goal and block shots
-        goal_position = np.array([0, 0])  # Assume goal is at (0, 0)
-        if (
-            np.linalg.norm(self.ball_pos - goal_position) < 5
-        ):  # Ball is close to the goal
-            return self.ball_pos - player_pos  # Move towards the ball
-        return goal_position - player_pos  # Stay near the goal
+        # Stay on the goal line, and come out for the ball when it is close
+        if np.linalg.norm(self.ball_pos - self.OWN_GOAL) < self.KEEPER_RANGE:
+            return self.ball_pos - player_pos
+        target = np.array(
+            [
+                self.OWN_GOAL[0],
+                np.clip(self.ball_pos[1], Constants.GOAL_Y_MIN, Constants.GOAL_Y_MAX),
+            ]
+        )
+        return target - player_pos
 
     def plan_defender(self, player_pos):
         # Position between the ball and the goal
-        goal_position = np.array([0, 0])
-        intercept_position = (self.ball_pos + goal_position) / 2
+        intercept_position = (self.ball_pos + self.OWN_GOAL) / 2
         return intercept_position - player_pos
 
     def plan_midfielder(self, player_pos):
         # Stay near the center and assist
-        center_position = np.array([50, 50])  # Assume center of the field
-        if np.linalg.norm(self.ball_pos - player_pos) < 10:  # Ball is close
-            return self.ball_pos - player_pos  # Move towards the ball
-        return center_position - player_pos
+        if np.linalg.norm(self.ball_pos - player_pos) < self.MIDFIELD_RANGE:
+            return self.ball_pos - player_pos
+        return self.CENTRE - player_pos
 
     def plan_attacker(self, player_pos):
-        # Chase the ball and aim for the goal
-        if np.linalg.norm(self.ball_pos - player_pos) < 5:  # Close to the ball
-            opponent_goal = np.array([100, 50])  # Assume opponent's goal position
-            return opponent_goal - player_pos  # Move towards the goal
-        return self.ball_pos - player_pos  # Move towards the ball
+        # Get behind the ball, then drive it towards the opponent's goal
+        if (
+            player_pos[0] < self.ball_pos[0]
+            and np.linalg.norm(self.ball_pos - player_pos) < self.ATTACKER_RANGE
+        ):
+            return self.OPPONENT_GOAL - player_pos
+        return self.ball_pos - player_pos

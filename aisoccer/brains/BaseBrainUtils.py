@@ -30,6 +30,9 @@ class BaseBrainUtils(AbstractBrain, ABC):
         ball_dx = self.ball_vel[0]
         ball_dy = self.ball_vel[1]
 
+        if ball_dx == 0:
+            return ball_y
+
         t = abs((ball_x - x) / ball_dx)
         y = ball_y + t * ball_dy
         y_multiples = int(y // Constants.FIELD_HEIGHT)

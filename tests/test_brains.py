@@ -1,6 +1,5 @@
 import importlib
 import inspect
-from abc import ABCMeta
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +23,8 @@ for file in BRAINS_FOLDER.glob("*.py"):
         if (
             issubclass(obj, AbstractBrain)
             and obj is not AbstractBrain
-            and not isinstance(obj, ABCMeta)  # Exclude abstract classes
+            and not inspect.isabstract(obj)
+            and obj.__module__ == module_name  # skip classes imported from elsewhere
         ):
             brain_classes.append(obj)
 
@@ -34,6 +34,7 @@ def test_brain_implementation(BrainClass):
     """Test that each brain implementation behaves correctly."""
     # Instantiate the brain
     brain = BrainClass()
+    assert brain.name, f"{BrainClass.__name__} has no default name."
 
     # Check that the brain implements do_move
     assert hasattr(
@@ -101,8 +102,8 @@ def test_adaptive_chaser_defensive_strategy():
 
     moves = brain.do_move()
 
-    # Assert players move towards the goal defensively
-    goal_position = np.array([0, 0])
+    # Assert players move towards their own goal defensively
+    goal_position = AdaptiveChaser.OWN_GOAL
     for move, player_pos in zip(moves, brain.my_players_pos):
         assert np.allclose(move, goal_position - player_pos)
 
