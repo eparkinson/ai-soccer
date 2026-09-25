@@ -160,24 +160,26 @@ This is why the training evaluations use 48-144 games per opponent and why `ppo_
 
 ### Result
 
-`poetry run python ppo_tournament.py` plays a round robin of every brain, including earlier PPOBrain versions, with 300 games per pairing (3300 games per brain). Result for the committed weights, `seed=2026`:
+`poetry run python ppo_tournament.py` plays a round robin of every brain, including earlier PPOBrain versions, with 300 games per pairing (3900 games per brain). Result for the committed weights (PPO-champ-1, the league's first promoted champion), `seed=2026`:
 
 | Brain | Points per game (95% CI) | W | L | GD |
 | --- | ---: | ---: | ---: | ---: |
-| **PPOBrain** | **2.07 +/- 0.04** | 1913 | 289 | 3786 |
-| PPO-it120 (earlier version) | 2.00 +/- 0.04 | 1830 | 353 | 3589 |
-| DefendersAndAttackers | 1.97 +/- 0.04 | 1783 | 362 | 3093 |
-| PPO-it80 (earlier version) | 1.88 +/- 0.04 | 1694 | 486 | 2902 |
-| PPO-clone (before PPO) | 1.72 +/- 0.04 | 1523 | 657 | 2054 |
-| StrategicPlanner | 1.60 +/- 0.04 | 1286 | 597 | 1411 |
-| BehindAndTowards | 1.29 +/- 0.04 | 1153 | 1363 | -256 |
-| AdaptiveChaser | 1.04 +/- 0.04 | 942 | 1757 | -2348 |
-| SimpleBrain | 0.91 +/- 0.04 | 785 | 1860 | -2232 |
-| PPO-scratch (PPO without cloning) | 0.80 +/- 0.04 | 607 | 1875 | -2511 |
-| RandomWalk | 0.51 +/- 0.03 | 338 | 2286 | -4671 |
-| LearningBrain | 0.50 +/- 0.03 | 332 | 2301 | -4817 |
+| **PPOBrain (PPO-champ-1)** | **2.09 +/- 0.03** | 2266 | 274 | 4623 |
+| PPO-champ-0 (previous champion) | 2.07 +/- 0.03 | 2216 | 265 | 4708 |
+| PPO-first-it230 (first committed PPOBrain) | 1.96 +/- 0.04 | 2067 | 373 | 3971 |
+| PPO-it120 | 1.84 +/- 0.04 | 1909 | 523 | 3462 |
+| DefendersAndAttackers | 1.79 +/- 0.04 | 1798 | 523 | 2936 |
+| PPO-it80 | 1.71 +/- 0.04 | 1754 | 730 | 2626 |
+| PPO-clone (before PPO) | 1.54 +/- 0.04 | 1544 | 968 | 1668 |
+| StrategicPlanner | 1.46 +/- 0.04 | 1343 | 893 | 1202 |
+| BehindAndTowards | 1.14 +/- 0.04 | 1176 | 1798 | -1122 |
+| AdaptiveChaser | 0.90 +/- 0.04 | 942 | 2264 | -3664 |
+| SimpleBrain | 0.81 +/- 0.04 | 786 | 2329 | -3354 |
+| PPO-scratch (PPO without cloning) | 0.71 +/- 0.03 | 661 | 2455 | -4375 |
+| RandomWalk | 0.44 +/- 0.03 | 328 | 2854 | -6330 |
+| LearningBrain | 0.43 +/- 0.03 | 328 | 2869 | -6351 |
 
-PPOBrain tops the table with significantly more points per game than any other brain, and is significantly stronger head to head than every brain except DefendersAndAttackers. Against DefendersAndAttackers it is level: a goal difference of +0.08 +/- 0.09 per game in PPOBrain's favour (66 wins, 181 draws, 53 losses), not yet significant.
+PPOBrain tops the table and is significantly stronger head to head than every original brain, including DefendersAndAttackers (goal difference +0.18 +/- 0.08 per game in PPOBrain's favour), and than every earlier PPOBrain version except its immediate predecessor PPO-champ-0 (+0.07 +/- 0.09, not significant).
 
 ## League Training: Many Approaches at Once
 
