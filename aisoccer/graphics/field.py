@@ -7,6 +7,9 @@ from aisoccer.game import GameResult
 class Field(pyglet.window.Window):
     # Constants relating to visual display of games go here.
     UPDATE_FREQUENCY = 0.02
+    # Simulation ticks per rendered frame. Raising this speeds up playback
+    # without changing the physics step.
+    TICKS_PER_FRAME = 2
     BALL_COLOUR = (255, 255, 255)
     FIELD_COLOUR = (96, 96, 96)
     TEAM_COLOURS = [(64, 64, 255), (255, 64, 64)]
@@ -42,7 +45,10 @@ class Field(pyglet.window.Window):
         self.game = game
 
     def update(self, dt):
-        if not self.game_over:
+        for _ in range(Field.TICKS_PER_FRAME):
+            if self.game_over:
+                return
+
             result = self.game.tick()
 
             self.score = "{} - {}".format(

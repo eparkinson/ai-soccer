@@ -47,6 +47,7 @@ class Game:
         self.record_game = record_game
         self.score = {"red": 0, "blue": 0}
         self.last_goal_tick = 0  # Track the tick count of the last goal
+        self._speed_caps = None  # per body in the physics state, for limit_velocities
 
         self.seed_brains()
 
@@ -184,10 +185,24 @@ class Game:
             self.record_move("red", *red_view, flip_acc(red_move))
 
     def limit_velocities(self):
-        clamp_speed(self.ball.body, Constants.MAX_BALL_VELOCITY)
-        for t in self.teams:
-            for p in t.players:
-                clamp_speed(p.body, Constants.MAX_PLAYER_VELOCITY)
+        state = self.state
+        if self.ball.body._state is not state:  # bodies not in the state: one at a time
+            clamp_speed(self.ball.body, Constants.MAX_BALL_VELOCITY)
+            for t in self.teams:
+                for p in t.players:
+                    clamp_speed(p.body, Constants.MAX_PLAYER_VELOCITY)
+            return
+        if self._speed_caps is None or len(self._speed_caps) != len(state.bodies):
+            caps = np.full(len(state.bodies), np.inf)
+            for t in self.teams:
+                for p in t.players:
+                    caps[p.body._index] = Constants.MAX_PLAYER_VELOCITY
+            caps[self.ball.body._index] = Constants.MAX_BALL_VELOCITY
+            self._speed_caps = caps
+        speed = np.hypot(state.vel[:, 0], state.vel[:, 1])
+        too_fast = speed > self._speed_caps
+        if too_fast.any():
+            state.vel[too_fast] *= (self._speed_caps[too_fast] / speed[too_fast])[:, None]
 
     def play(self):
         while True:
