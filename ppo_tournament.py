@@ -13,6 +13,7 @@ record against PPOBrain and marks it significant when that interval excludes zer
 """
 
 import argparse
+from pathlib import Path
 
 import numpy as np
 
@@ -24,6 +25,7 @@ from aisoccer.brains.PPOBrain import PPOBrain
 from aisoccer.brains.RandomWalk import RandomWalk
 from aisoccer.brains.SimpleBrain import SimpleBrain
 from aisoccer.brains.StrategicPlanner import StrategicPlanner
+from aisoccer.brainspec import load_brain
 from aisoccer.tournament import Tournament
 
 
@@ -42,27 +44,37 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--legs", type=int, default=300, help="games per pairing")
     parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument(
+        "--champion",
+        default=str(PPOBrain.WEIGHTS_FILE),
+        help="the brain under test, as a brain spec (see aisoccer/brainspec.py)",
+    )
     args = parser.parse_args()
 
     history = PPOBrain.WEIGHTS_FILE.parent / "history"
-    current = PPOBrain()
+    champion = Path(args.champion)
+    current = load_brain(
+        args.champion, name="PPOBrain" if champion == PPOBrain.WEIGHTS_FILE else None
+    )
+    saved = sorted(list(history.glob("*.npz")) + list(history.glob("*champ-*.json")))
     past_versions = [
-        PPOBrain(path.stem, weights=PPOBrain.load_weights(path))
-        for path in sorted(history.glob("*.npz"))
+        load_brain(path) for path in saved if path.resolve() != champion.resolve()
     ]
-    # Skip saved copies of the brain under test: a brain cannot beat itself.
-    past_versions = [
-        brain
-        for brain in past_versions
-        if not (
-            brain.role_policies is None
+
+    def same_policy(brain):
+        """A saved PPOBrain identical to the brain under test (it cannot beat itself)."""
+        return (
+            isinstance(brain, PPOBrain)
+            and isinstance(current, PPOBrain)
+            and brain.role_policies is None
             and current.role_policies is None
             and all(
                 np.shape(a) == np.shape(b) and np.array_equal(a, b)
                 for a, b in zip(brain.policy.params, current.policy.params)
             )
         )
-    ]
+
+    past_versions = [brain for brain in past_versions if not same_policy(brain)]
     brains = [
         current,
         *past_versions,

@@ -45,13 +45,15 @@ from aisoccer.abstractbrain import AbstractBrain  # noqa: E402
 from aisoccer.brains.AdaptiveChaser import AdaptiveChaser  # noqa: E402
 from aisoccer.brains.BehindAndTowards import BehindAndTowards  # noqa: E402
 from aisoccer.brains.DefendersAndAttackers import DefendersAndAttackers  # noqa: E402
-from aisoccer.brains.GeneticBrain import GeneticBrain  # noqa: E402
 from aisoccer.brains.PPOBrain import ACT_DIM, OBS_DIM, PPOBrain, player_features  # noqa
 from aisoccer.brains.RandomWalk import RandomWalk  # noqa: E402
 from aisoccer.brains.SimpleBrain import SimpleBrain  # noqa: E402
 from aisoccer.brains.StrategicPlanner import StrategicPlanner  # noqa: E402
+from aisoccer.brainspec import load_brain  # noqa: E402
+from aisoccer.constants import Constants  # noqa: E402
 from aisoccer.game import Game  # noqa: E402
 from aisoccer.ppo import PPO, Adam, gae  # noqa: E402
+from aisoccer.vecgame import VecGame  # noqa: E402
 
 HEURISTICS = {
     "DefendersAndAttackers": DefendersAndAttackers,
@@ -88,10 +90,7 @@ def make_opponent(name):
     if name in HEURISTICS:
         return HEURISTICS[name]()
     if name.startswith("file:"):
-        path = Path(name.removeprefix("file:"))
-        if path.suffix == ".json":
-            return GeneticBrain(path.stem, GeneticBrain.load(path))
-        return PPOBrain(path.stem, weights=PPOBrain.load_weights(path))
+        return load_brain(name.removeprefix("file:"))
     return PPOBrain(name, weights=PPOBrain.load_weights(HISTORY_DIR / f"{name}.npz"))
 
 
@@ -113,9 +112,11 @@ def log(message=""):
         f.write(message + "\n")
 
 
-def play_training_game(task):
-    """Play one game in a worker and return the learner's (and self-play twin's) experience."""
+def training_brains(task, make=None):
+    """The learner and its opponent for a training game, and whether the learner is blue."""
     weights, opponent, opponent_weights, seed, gamma, reward = task
+    if opponent.startswith("file:") and not Path(opponent.removeprefix("file:")).exists():
+        opponent = "self"  # the league replaced the pool between rounds: play itself instead
     rng = np.random.default_rng(seed)
     learner = PPOBrain("learner", weights=weights, training=True, reward=reward)
 
@@ -124,11 +125,15 @@ def play_training_game(task):
     elif opponent == "snapshot":
         other = PPOBrain("snapshot", weights=opponent_weights, deterministic=False)
     else:
-        other = make_opponent(opponent)
+        other = (make or make_opponent)(opponent)
 
     learner_blue = rng.random() < 0.5
-    blue, red = (learner, other) if learner_blue else (other, learner)
-    score = Game(blue, red, quiet_mode=True, seed=seed).play()
+    return learner, other, learner_blue
+
+
+def training_outcome(task, learner, other, learner_blue, score):
+    """What a training game returns: (opponent, goals for, against, trajectories)."""
+    _, opponent, _, _, gamma, _ = task
     mine, theirs = (
         (score["blue"], score["red"]) if learner_blue else (score["red"], score["blue"])
     )
@@ -137,6 +142,80 @@ def play_training_game(task):
     if opponent == "self":
         trajectories.append(other.finish_trajectory(gamma))
     return opponent, mine, theirs, trajectories
+
+
+def play_training_game(task):
+    """Play one game in a worker and return the learner's (and self-play twin's) experience."""
+    learner, other, learner_blue = training_brains(task)
+    blue, red = (learner, other) if learner_blue else (other, learner)
+    score = Game(blue, red, game_length=GAME_LENGTH, quiet_mode=True, seed=task[3]).play()
+    return training_outcome(task, learner, other, learner_blue, score)
+
+
+def vectorisable(task):
+    """Games whose brains are all PPOBrains can be played together in a VecGame."""
+    opponent = task[1]
+    return opponent in ("self", "snapshot") or (
+        opponent.startswith("file:") and opponent.endswith(".npz")
+    )
+
+
+def play_training_games(tasks, precision="exact"):
+    """
+    Play several vectorisable training games together in one VecGame and return
+    play_training_game's result for each task: game k is the game that
+    play_training_game(tasks[k]) plays, bit for bit, with the same trajectories.
+    ``precision="float32"`` runs the networks in single precision: several times
+    faster, with network outputs within about 1e-7 of float64, so the games start the
+    same but drift apart after a few hundred ticks (statistically the same games).
+    """
+    loaded = {}
+
+    def make(opponent):  # pool files are read once, their networks shared by the games
+        if opponent not in loaded:
+            loaded[opponent] = PPOBrain.load_weights(opponent.removeprefix("file:"))
+        name = Path(opponent.removeprefix("file:")).stem
+        return PPOBrain(name, weights=loaded[opponent])
+
+    games = [training_brains(task, make) for task in tasks]
+    blue = [lr if lb else o for lr, o, lb in games]
+    red = [o if lb else lr for lr, o, lb in games]
+    scores = VecGame(blue, red, [task[3] for task in tasks], game_length=GAME_LENGTH, precision=precision).play()
+    return [
+        training_outcome(task, *game, score)
+        for task, game, score in zip(tasks, games, scores)
+    ]
+
+
+def play_work_item(item):
+    """A worker's share of an iteration: one game, or ("batch", tasks) for a VecGame."""
+    if item[0] == "batch":
+        return play_training_games(item[1], item[2])
+    return [play_training_game(item[1])]
+
+
+def play_iteration_games(workers, tasks, vector_games, precision="exact"):
+    """
+    Play an iteration's training games and return their outcomes in task order. With
+    vector_games, games against PPOBrains (self-play, snapshots, .npz pool files) are
+    played in VecGame batches of at most that many games, split evenly across batches;
+    the rest are played one at a time as before. ``precision`` is the VecGame
+    networks' precision (see play_training_games).
+    """
+    if not vector_games:
+        return workers.map(play_training_game, tasks)
+    vector = [i for i, t in enumerate(tasks) if vectorisable(t)]
+    single = [i for i, t in enumerate(tasks) if not vectorisable(t)]
+    n_batches = -(-len(vector) // vector_games)
+    batches = [list(b) for b in np.array_split(vector, n_batches)] if vector else []
+    items = [("batch", [tasks[i] for i in b], precision) for b in batches]
+    items += [("single", tasks[i]) for i in single]
+    order = [i for b in batches for i in b] + single
+    results = [o for r in workers.map(play_work_item, items, chunksize=1) for o in r]
+    outcomes = [None] * len(tasks)
+    for i, outcome in zip(order, results):
+        outcomes[i] = outcome
+    return outcomes
 
 
 def capped(action):
@@ -353,6 +432,8 @@ def evaluate(pool, weights, games_per_opponent, seed=0):
 
 
 CONFIG_KEYS = {
+    "action_repeat",
+    "game_length",
     "lr",
     "gamma",
     "lam",
@@ -364,6 +445,19 @@ CONFIG_KEYS = {
     "reward",
     "opponent_weights",
 }
+
+
+GAME_LENGTH = Constants.GAME_LENGTH  # ticks per training game (--game-length)
+
+
+def set_action_repeat(ticks, game_length=None):
+    """
+    The learner's (and its self-play twin's) decisions last `ticks` ticks; training
+    games last `game_length` ticks. Run in the main process and in every worker.
+    """
+    global GAME_LENGTH
+    PPOBrain.ACTION_REPEAT = ticks
+    GAME_LENGTH = game_length or Constants.GAME_LENGTH
 
 
 def apply_config(args, config):
@@ -426,6 +520,15 @@ def main():
     )
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.995)
+    parser.add_argument(
+        "--game-length", type=int, default=Constants.GAME_LENGTH, help="ticks per training game"
+    )
+    parser.add_argument(
+        "--action-repeat",
+        type=int,
+        default=PPOBrain.ACTION_REPEAT,
+        help="ticks each decision is held for (saved with the weights)",
+    )
     parser.add_argument("--lam", type=float, default=0.95)
     parser.add_argument("--eval-every", type=int, default=10)
     parser.add_argument(
@@ -499,6 +602,22 @@ def main():
     )
     parser.add_argument("--pool-share", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--vector-games",
+        type=int,
+        default=0,
+        help="play training games against PPOBrains (self-play, snapshots, .npz pool "
+        "files) together in VecGame batches of up to this many games (0: one at a time). "
+        "Same games for far less CPU; about games/workers keeps every worker busy",
+    )
+    parser.add_argument(
+        "--vector-precision",
+        choices=["exact", "float32"],
+        default="exact",
+        help="with --vector-games: 'exact' plays bit-identical games to the one-at-a-time "
+        "path; 'float32' runs the networks in single precision, faster still, its games "
+        "the same up to float32 rounding (they drift apart after a few hundred ticks)",
+    )
     args = parser.parse_args()
     args.reward = None
     args.opponent_weights = dict(OPPONENT_WEIGHTS)
@@ -549,13 +668,15 @@ def main():
 
     best_score = -1.0
 
+    set_action_repeat(args.action_repeat, args.game_length)
     log(
         f"Training PPOBrain: {args.games} games/iteration on {args.workers} workers, "
         f"obs {OBS_DIM}, action repeat {PPOBrain.ACTION_REPEAT}"
     )
     log(f"Settings: {settings(args)}")
 
-    with Pool(args.workers) as workers:
+    # Workers are fresh processes: they get the learner's action repeat too.
+    with Pool(args.workers, initializer=set_action_repeat, initargs=(args.action_repeat, args.game_length)) as workers:
         best_weights = PPOBrain.load_weights(PPOBrain.WEIGHTS_FILE)
         if args.resume and best_weights is not None:
             log("\nBASELINE: the saved best weights")
@@ -614,7 +735,7 @@ def main():
             opponent_p = np.array(
                 [args.opponent_weights[n] for n in opponent_names], float
             )
-            opponent_p /= opponent_p.sum()
+            opponent_p /= max(opponent_p.sum(), 1e-9)
             pool = sorted(args.pool_dir.glob("*")) if args.pool_dir else []
             pool = [
                 p
@@ -635,11 +756,21 @@ def main():
                 elif pool and roll < args.self_play + args.snapshots + args.pool_share:
                     opp = "file:" + str(pool[rng.integers(len(pool))])
                     tasks.append((weights, opp, None, *task_end))
+                elif not opponent_names:
+                    # No fixed opponents (a league that starts from zero): the league
+                    # pool if there is one yet, otherwise self-play.
+                    if pool:
+                        opp = "file:" + str(pool[rng.integers(len(pool))])
+                        tasks.append((weights, opp, None, *task_end))
+                    else:
+                        tasks.append((weights, "self", None, *task_end))
                 else:
                     opp = str(rng.choice(opponent_names, p=opponent_p))
                     tasks.append((weights, opp, None, *task_end))
 
-            outcomes = workers.map(play_training_game, tasks)
+            outcomes = play_iteration_games(
+                workers, tasks, args.vector_games, args.vector_precision
+            )
             trajectories = [t for o in outcomes for t in o[3]]
             batch = build_batch(trajectories, args.gamma, args.lam)
             played = time.time() - started

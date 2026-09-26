@@ -22,6 +22,7 @@ import numpy as np
 
 from aisoccer.brains.GeneticBrain import CHROMOSOME_LENGTH, DEFENSIVE_SEED, GeneticBrain
 from aisoccer.game import Game
+from aisoccer.brainspec import panel_from_dir
 from league import HISTORY_DIR, LEAGUE_DIR, make_brain
 
 GA_DIR = LEAGUE_DIR / "ga"
@@ -51,10 +52,10 @@ def play(task):
     return (score["blue"], score["red"]) if ga_blue else (score["red"], score["blue"])
 
 
-def evaluate(workers, population, games, seed):
+def evaluate(workers, population, games, seed, panel=None):
     """Fitness of every individual, on shared kick-offs against the same panel."""
     rng = np.random.default_rng(seed)
-    panel = [champion_path() if p == "champion" else p for p in PANEL]
+    panel = panel or [champion_path() if p == "champion" else p for p in PANEL]
     seeds = rng.integers(2**31, size=games)
     tasks = [
         (ind, opp, g % 2 == 0, int(seeds[g]))
@@ -91,6 +92,9 @@ def breed(population, fitness, rng, elite, mutation_rate, mutation_sd):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--workers", type=int, default=3)
+    parser.add_argument("--panel-dir", help="play against brains from this folder (e.g. the league field)")
+    parser.add_argument("--panel-size", type=int, default=4)
+    parser.add_argument("--random-init", action="store_true", help="start from random chromosomes")
     parser.add_argument("--population", type=int, default=24)
     parser.add_argument("--games", type=int, default=12, help="per panel opponent")
     parser.add_argument("--elite", type=int, default=4)
@@ -107,12 +111,12 @@ def main():
         generation = state["generation"]
         log(f"GA resumed at generation {generation}")
     else:
-        half = args.population // 2
+        half = 0 if args.random_init else args.population // 2
         seeded = [
             np.clip(DEFENSIVE_SEED + rng.normal(0, 0.1, CHROMOSOME_LENGTH), 0, 1)
             for _ in range(half - 1)
         ]
-        population = [DEFENSIVE_SEED.copy()] + seeded
+        population = ([] if args.random_init else [DEFENSIVE_SEED.copy()]) + seeded
         population += [
             rng.random(CHROMOSOME_LENGTH)
             for _ in range(args.population - len(population))
@@ -124,7 +128,8 @@ def main():
     with Pool(args.workers) as workers:
         while True:
             generation += 1
-            fitness = evaluate(workers, population, args.games, seed=generation)
+            panel = panel_from_dir(args.panel_dir, args.panel_size, rng) if args.panel_dir else None
+            fitness = evaluate(workers, population, args.games, seed=generation, panel=panel)
             best = int(np.argmax(fitness))
             tmp = GA_DIR / "best.tmp.json"
             GeneticBrain.save(

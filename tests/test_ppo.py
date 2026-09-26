@@ -253,3 +253,81 @@ def test_mixed_team_uses_each_roles_policy(tmp_path):
     for r in range(5):
         expected = PPOBrain("one", weights=sources[r]).policy(obs[[r]])[0]
         assert np.allclose(action[r], expected)
+
+
+import aisoccer.brains.PPOBrain as ppobrain  # noqa: E402
+
+
+def reference_player_features(
+    my_pos, my_vel, opp_pos, opp_vel, ball_pos, ball_vel, my_score, opp_score, game_time
+):
+    """
+    One observation row per player, from that player's point of view (a 5 x OBS_DIM
+    matrix). All five players share one policy network, so each row carries the player's
+    role (its index) and everything relative to the player itself.
+    """
+    my_pos = np.asarray(my_pos, dtype=float)
+    my_vel = np.asarray(my_vel, dtype=float)
+    opp_pos = np.asarray(opp_pos, dtype=float)
+    opp_vel = np.asarray(opp_vel, dtype=float)
+    ball_pos = np.asarray(ball_pos, dtype=float).reshape(2)
+    ball_vel = np.asarray(ball_vel, dtype=float).reshape(2)
+
+    def norm_pos(p):
+        return np.stack([p[..., 0] / ppobrain.L * 2 - 1, p[..., 1] / ppobrain.H * 2 - 1], axis=-1)
+
+    ball_rel = ball_pos[None, :] - my_pos  # (5, 2)
+    ball_dist = np.linalg.norm(ball_rel, axis=1)
+
+    team_rel = my_pos[None, :, :] - my_pos[:, None, :]  # [i, j] = pos j - pos i
+    team_rel = np.take_along_axis(team_rel, ppobrain.TEAMMATES[:, :, None], axis=1)
+    team_vel = my_vel[ppobrain.TEAMMATES]
+
+    opp_rel = opp_pos[None, :, :] - my_pos[:, None, :]
+    order = np.argsort((opp_rel**2).sum(axis=2), axis=1)  # nearest opponent first
+    opp_rel = np.take_along_axis(opp_rel, order[:, :, None], axis=1)
+    opp_v = opp_vel[order]
+
+    closer_teammates = (ball_dist[None, :] < ball_dist[:, None]).sum(axis=1) / (ppobrain.NUM - 1)
+    score_diff = np.clip(my_score - opp_score, -3, 3) / 3.0
+
+    n = my_pos.shape[0]
+    return np.concatenate(
+        [
+            norm_pos(my_pos),
+            my_vel / ppobrain.Constants.MAX_PLAYER_VELOCITY,
+            ball_rel / ppobrain.REL_SCALE,
+            np.broadcast_to(norm_pos(ball_pos), (n, 2)),
+            np.broadcast_to(ball_vel / ppobrain.Constants.MAX_BALL_VELOCITY, (n, 2)),
+            team_rel.reshape(n, -1) / ppobrain.REL_SCALE,
+            team_vel.reshape(n, -1) / ppobrain.Constants.MAX_PLAYER_VELOCITY,
+            opp_rel.reshape(n, -1) / ppobrain.REL_SCALE,
+            opp_v.reshape(n, -1) / ppobrain.Constants.MAX_PLAYER_VELOCITY,
+            ppobrain.ROLES[:n],
+            closer_teammates[:, None],
+            np.full((n, 1), score_diff),
+            np.full((n, 1), game_time),
+        ],
+        axis=1,
+    )
+
+
+
+def test_fast_player_features_match_reference_exactly():
+    """The optimised features must be bit-identical: every trained network depends on them."""
+    rng = np.random.default_rng(10)
+    for k in range(3000):
+        args = (
+            rng.uniform(0, 1800, (5, 2)),
+            rng.normal(0, 3, (5, 2)),
+            rng.uniform(0, 1800, (5, 2)),
+            rng.normal(0, 3, (5, 2)),
+            rng.uniform(0, 1800, 2),
+            rng.normal(0, 5, 2),
+            int(rng.integers(0, 5)),
+            int(rng.integers(0, 5)),
+            float(rng.random()),
+        )
+        if k % 3 == 0:  # exact ties in distances, as at kick-off
+            args = (np.round(args[0], -2), args[1], np.round(args[2], -2), *args[3:])
+        assert np.array_equal(player_features(*args), reference_player_features(*args))

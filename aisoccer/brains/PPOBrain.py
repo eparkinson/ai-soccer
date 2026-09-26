@@ -16,6 +16,9 @@ TEAMMATES = np.array([[j for j in range(NUM) if j != i] for i in range(NUM)])
 ROLES = np.eye(NUM)
 
 
+ROWS = np.arange(NUM)[:, None]
+
+
 def player_features(
     my_pos, my_vel, opp_pos, opp_vel, ball_pos, ball_vel, my_score, opp_score, game_time
 ):
@@ -23,6 +26,9 @@ def player_features(
     One observation row per player, from that player's point of view (a 5 x OBS_DIM
     matrix). All five players share one policy network, so each row carries the player's
     role (its index) and everything relative to the player itself.
+
+    Runs every decision in every game, so it fills one preallocated array with direct
+    indexing (tests check it matches the straightforward version bit for bit).
     """
     my_pos = np.asarray(my_pos, dtype=float)
     my_vel = np.asarray(my_vel, dtype=float)
@@ -30,44 +36,30 @@ def player_features(
     opp_vel = np.asarray(opp_vel, dtype=float)
     ball_pos = np.asarray(ball_pos, dtype=float).reshape(2)
     ball_vel = np.asarray(ball_vel, dtype=float).reshape(2)
+    n = my_pos.shape[0]
+    out = np.empty((n, OBS_DIM))
 
-    def norm_pos(p):
-        return np.stack([p[..., 0] / L * 2 - 1, p[..., 1] / H * 2 - 1], axis=-1)
-
-    ball_rel = ball_pos[None, :] - my_pos  # (5, 2)
-    ball_dist = np.linalg.norm(ball_rel, axis=1)
-
-    team_rel = my_pos[None, :, :] - my_pos[:, None, :]  # [i, j] = pos j - pos i
-    team_rel = np.take_along_axis(team_rel, TEAMMATES[:, :, None], axis=1)
-    team_vel = my_vel[TEAMMATES]
-
+    ball_rel = ball_pos[None, :] - my_pos
+    ball_dist = np.sqrt((ball_rel * ball_rel).sum(axis=1))
     opp_rel = opp_pos[None, :, :] - my_pos[:, None, :]
     order = np.argsort((opp_rel**2).sum(axis=2), axis=1)  # nearest opponent first
-    opp_rel = np.take_along_axis(opp_rel, order[:, :, None], axis=1)
-    opp_v = opp_vel[order]
 
-    closer_teammates = (ball_dist[None, :] < ball_dist[:, None]).sum(axis=1) / (NUM - 1)
-    score_diff = np.clip(my_score - opp_score, -3, 3) / 3.0
-
-    n = my_pos.shape[0]
-    return np.concatenate(
-        [
-            norm_pos(my_pos),
-            my_vel / Constants.MAX_PLAYER_VELOCITY,
-            ball_rel / REL_SCALE,
-            np.broadcast_to(norm_pos(ball_pos), (n, 2)),
-            np.broadcast_to(ball_vel / Constants.MAX_BALL_VELOCITY, (n, 2)),
-            team_rel.reshape(n, -1) / REL_SCALE,
-            team_vel.reshape(n, -1) / Constants.MAX_PLAYER_VELOCITY,
-            opp_rel.reshape(n, -1) / REL_SCALE,
-            opp_v.reshape(n, -1) / Constants.MAX_PLAYER_VELOCITY,
-            ROLES[:n],
-            closer_teammates[:, None],
-            np.full((n, 1), score_diff),
-            np.full((n, 1), game_time),
-        ],
-        axis=1,
-    )
+    out[:, 0] = my_pos[:, 0] / L * 2 - 1
+    out[:, 1] = my_pos[:, 1] / H * 2 - 1
+    out[:, 2:4] = my_vel / Constants.MAX_PLAYER_VELOCITY
+    out[:, 4:6] = ball_rel / REL_SCALE
+    out[:, 6] = ball_pos[0] / L * 2 - 1
+    out[:, 7] = ball_pos[1] / H * 2 - 1
+    out[:, 8:10] = ball_vel / Constants.MAX_BALL_VELOCITY
+    out[:, 10:18] = (my_pos[TEAMMATES[:n]] - my_pos[:, None, :]).reshape(n, -1) / REL_SCALE
+    out[:, 18:26] = my_vel[TEAMMATES[:n]].reshape(n, -1) / Constants.MAX_PLAYER_VELOCITY
+    out[:, 26:36] = opp_rel[ROWS[:n], order].reshape(n, -1) / REL_SCALE
+    out[:, 36:46] = opp_vel[order].reshape(n, -1) / Constants.MAX_PLAYER_VELOCITY
+    out[:, 46:51] = ROLES[:n]
+    out[:, 51] = (ball_dist[None, :] < ball_dist[:, None]).sum(axis=1) / (NUM - 1)
+    out[:, 52] = np.clip(my_score - opp_score, -3, 3) / 3.0
+    out[:, 53] = game_time
+    return out
 
 
 OBS_DIM = 54

@@ -2,14 +2,47 @@ import numpy as np
 
 
 class Body:
+    """
+    A circular body. Once added to a PhyState its position and velocity live in the
+    state's arrays (so a tick updates every body at once); reading them returns a copy.
+    """
+
     def __init__(self, radius, position, fixed=False):
         self.radius = radius
-        self.position = np.array(position, dtype=float)
-        self.velocity = np.array([0.0, 0.0])
+        self._state = None  # the PhyState holding this body's position and velocity
+        self._index = None
+        self._position = np.array(position, dtype=float)
+        self._velocity = np.array([0.0, 0.0])
         self.acceleration = np.array([0.0, 0.0])
         # Fixed bodies (e.g. goal posts) have infinite mass: other bodies bounce off them
         # but they never move.
         self.fixed = fixed
+
+    @property
+    def position(self):
+        if self._state is not None:
+            return self._state.pos[self._index].copy()
+        return self._position
+
+    @position.setter
+    def position(self, value):
+        if self._state is not None:
+            self._state.pos[self._index] = value
+        else:
+            self._position = np.array(value, dtype=float)
+
+    @property
+    def velocity(self):
+        if self._state is not None:
+            return self._state.vel[self._index].copy()
+        return self._velocity
+
+    @velocity.setter
+    def velocity(self, value):
+        if self._state is not None:
+            self._state.vel[self._index] = value
+        else:
+            self._velocity = np.array(value, dtype=float)
 
     def normal_velocity(self):
         return np.linalg.norm(self.velocity)
@@ -33,6 +66,11 @@ class PhyState:
 
     def __init__(self, maxX, maxY, goal_depth=0, goal_y_min=0.0, goal_y_max=0.0):
         self.bodies = []
+        # Every body's state in one place, updated in place each tick.
+        self.pos = np.zeros((0, 2))
+        self.vel = np.zeros((0, 2))
+        self.radius = np.zeros(0)
+        self.fixed = np.zeros(0, dtype=bool)
         self.maxX = maxX
         self.maxY = maxY
         self.goal_depth = goal_depth
@@ -41,7 +79,13 @@ class PhyState:
         self.ticks = 0
 
     def add_body(self, body):
+        position, velocity = body.position, body.velocity
+        body._state, body._index = self, len(self.bodies)
         self.bodies.append(body)
+        self.pos = np.vstack([self.pos, position])
+        self.vel = np.vstack([self.vel, velocity])
+        self.radius = np.append(self.radius, float(body.radius))
+        self.fixed = np.append(self.fixed, bool(body.fixed))
 
     def tick(self):
         """
@@ -50,20 +94,12 @@ class PhyState:
         """
         self.ticks = self.ticks + 1
 
-        bodies = self.bodies
-        pos = np.array([b.position for b in bodies], dtype=float)
-        vel = np.array([b.velocity for b in bodies], dtype=float)
-        radius = np.array([b.radius for b in bodies], dtype=float)
-        fixed = np.array([b.fixed for b in bodies])
-
-        vel = self._collide(pos, vel, radius, fixed)
+        pos, radius, fixed = self.pos, self.radius, self.fixed
+        vel = self._collide(pos, self.vel, radius, fixed)
         vel = self._bounce_walls(pos, vel, radius)
         vel[fixed] = 0.0
-        pos = pos + vel
-
-        for i, b in enumerate(bodies):
-            b.position = pos[i]
-            b.velocity = vel[i]
+        self.pos = pos + vel
+        self.vel = vel
 
     @staticmethod
     def _collide(pos, vel, radius, fixed):
@@ -115,4 +151,12 @@ class PhyState:
         return vel
 
     def clear(self):
+        for body in self.bodies:  # detach: bodies keep their last state
+            position, velocity = body.position, body.velocity
+            body._state = None
+            body.position, body.velocity = position, velocity
         self.bodies = []
+        self.pos = np.zeros((0, 2))
+        self.vel = np.zeros((0, 2))
+        self.radius = np.zeros(0)
+        self.fixed = np.zeros(0, dtype=bool)

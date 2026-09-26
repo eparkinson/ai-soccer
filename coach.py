@@ -102,12 +102,18 @@ def main():
             HISTORY_DIR.glob("PPO-champ-*.npz"),
             key=lambda p: int(p.stem.split("-")[-1]),
         )
-        start = args.start or champions[-1]
+        start = args.start or (champions[-1] if champions else None)
+        while start is None:  # a league starting from zero: wait for a learner's network
+            found = sources()
+            start = Path(next(iter(found.values()))) if found else None
+            if start is None:
+                time.sleep(30)
         policy = PPOBrain.load_weights(start)["policy"]
-        team = [(start.stem, policy)] * 5
+        start_label = f"learner {start.parent.name}" if start.stem == "policy" else start.stem
+        team = [(start_label, policy)] * 5
         save_team(team, team_file)
         labels_file.write_text(json.dumps([label for label, _ in team]))
-        log(f"Coach started from {start.stem} in every role")
+        log(f"Coach started from {start_label} in every role")
 
     proposal = 0
     with Pool(args.workers) as workers:
