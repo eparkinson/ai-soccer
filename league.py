@@ -409,7 +409,14 @@ def swiss(workers, brains, rounds, games, seed):
     )
     banned: list[tuple] = []
     for _ in range(rounds):
-        pairings, _byes = tournament.calculate_swiss_pairings(banned)
+        pairings, byes = tournament.calculate_swiss_pairings(banned)
+        # The greedy pairing can strand several players (every remaining opponent
+        # already met); pair them with each other so at most one sits out.
+        left = [
+            row["number"] for row in tournament.get_table() if row["number"] in byes
+        ]
+        while len(left) >= 2:
+            pairings.append(tuple(sorted((left.pop(0), left.pop(0)))))
         fixtures = tournament.fixtures(pairings)
         tasks = [(brains[names[b]], brains[names[r]], True, s) for b, r, s in fixtures]
         for (blue, red, _), (blue_goals, red_goals) in zip(
@@ -504,18 +511,40 @@ def log_round(number, standings, entrants, h2h, iterations, notes):
         log(f"  {note}")
 
 
-def run_verdict():
-    """Run ppo_tournament.py on PPOBrain.npz; True if every brain is significantly weaker."""
-    out = subprocess.run(
-        [sys.executable, "ppo_tournament.py", "--legs", "300"],
-        capture_output=True,
-        text=True,
-    ).stdout
-    (LEAGUE_DIR / f"verdict-{time.strftime('%H%M')}.log").write_text(out)
-    head_to_head = out.split("HEAD TO HEAD", 1)[-1]
-    verdicts = re.findall(r"(weaker than|stronger than|no significant)", head_to_head)
-    log(head_to_head.rstrip())
-    return bool(verdicts) and all(v == "weaker than" for v in verdicts)
+class Verdict:
+    """
+    The full verdict tournament (ppo_tournament.py, 300 games per pairing) on a new
+    champion, run in the background so the league keeps going while it plays.
+    """
+
+    def __init__(self, champion):
+        self.champion = champion.stem
+        self.path = LEAGUE_DIR / f"verdict-{self.champion}.log"
+        self.process = subprocess.Popen(
+            [sys.executable, "ppo_tournament.py", "--legs", "300"],
+            stdout=open(self.path, "w"),
+            stderr=subprocess.STDOUT,
+            env=dict(os.environ, OPENBLAS_NUM_THREADS="1"),
+            preexec_fn=lambda: os.nice(5),
+        )
+        self.reported = False
+
+    def stop(self):
+        if self.process.poll() is None:
+            self.process.terminate()
+
+    def result(self):
+        """None while running; otherwise (passed, head-to-head text)."""
+        if self.process.poll() is None:
+            return None
+        head_to_head = self.path.read_text().split("HEAD TO HEAD", 1)[-1]
+        verdicts = re.findall(
+            r"(weaker than|stronger than|no significant)", head_to_head
+        )
+        return (
+            bool(verdicts) and all(v == "weaker than" for v in verdicts),
+            head_to_head,
+        )
 
 
 def newest_champion():
@@ -622,6 +651,13 @@ def main():
 
     deadline = time.time() + args.hours * 3600
     round_number = state.get("round", 0)
+    verdict = None
+    pending = state.get("pending")  # entrant awaiting confirmation for promotion
+    verdict_log = LEAGUE_DIR / f"verdict-{champion.stem}.log"
+    finished = verdict_log.exists() and "HEAD TO HEAD" in verdict_log.read_text()
+    if not args.dry_run and not finished:
+        verdict = Verdict(champion)
+        log(f"Verdict tournament on {champion.stem} started in the background")
     try:
         with Pool(os.cpu_count()) as workers:
             while time.time() < deadline:
@@ -632,6 +668,20 @@ def main():
                             f"{name} exited ({process.process.returncode}); see its stdout.log"
                         )
                 round_number += 1
+
+                if verdict and not verdict.reported and verdict.result() is not None:
+                    passed, head_to_head = verdict.result()
+                    verdict.reported = True
+                    log(f"\nVERDICT on {verdict.champion} (300 games per pairing):")
+                    log(head_to_head.rstrip())
+                    if passed:
+                        log(
+                            "\nSUCCESS: the champion is significantly stronger than every brain."
+                        )
+                        break
+                    log(
+                        "  Not yet significantly stronger than every brain; the league continues."
+                    )
 
                 for process in everyone:
                     process.signal(signal.SIGSTOP)
@@ -692,9 +742,22 @@ def main():
                             "The GA beat the champion significantly (GeneticBrains are not promoted)."
                         )
                         candidates.remove("GA")
-                    new_champion = max(
+                    best = max(
                         candidates, key=lambda n: h2h[n]["record"]["gd"], default=None
                     )
+                    # Confirmation: a candidate is promoted only if it beats the same
+                    # champion significantly in two consecutive rounds (fresh games
+                    # each round). Picking the best of several candidates on one set
+                    # of games otherwise promotes luck (see the verdicts).
+                    new_champion = None
+                    if best and pending == best:
+                        new_champion = best
+                    elif best:
+                        notes.append(
+                            f"PENDING: {best} beat the champion significantly; it is promoted "
+                            "if it does so again next round"
+                        )
+                    pending = best
 
                     # Replacement, rated against the champion (the same opponent for all).
                     ratings = {n: h2h[n]["record"] for n in learners if n in h2h}
@@ -759,6 +822,7 @@ def main():
                         log(f"  (dry run) would promote {new_champion}")
                     elif new_champion:
                         champion = promote(entrants[new_champion])
+                        pending = None
                         for learner in learners.values():
                             learner.ratings = (
                                 []
@@ -766,20 +830,18 @@ def main():
                         log(
                             f"  NEW CHAMPION: {new_champion} -> {champion.stem} (and PPOBrain.npz)"
                         )
-                        if standings[0][0] == new_champion:
-                            log(
-                                "  It also topped the Swiss: running the verdict tournament"
-                            )
-                            if run_verdict():
-                                log(
-                                    "\nSUCCESS: the champion is significantly stronger than every brain."
-                                )
-                                break
+                        if verdict:
+                            verdict.stop()  # its champion has been superseded
+                        verdict = Verdict(champion)
+                        log(
+                            f"  Verdict tournament on {champion.stem} started in the background"
+                        )
 
                     state_file.write_text(
                         json.dumps(
                             {
                                 "round": round_number,
+                                "pending": pending,
                                 "learners": {n: l.state() for n, l in learners.items()},
                             },
                             indent=1,
@@ -802,6 +864,8 @@ def main():
                     for process in everyone:
                         process.signal(signal.SIGCONT)
     finally:
+        if verdict:
+            verdict.stop()
         for process in everyone:
             process.signal(signal.SIGTERM)
         log(

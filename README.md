@@ -160,26 +160,29 @@ This is why the training evaluations use 48-144 games per opponent and why `ppo_
 
 ### Result
 
-`poetry run python ppo_tournament.py` plays a round robin of every brain, including earlier PPOBrain versions, with 300 games per pairing (3900 games per brain). Result for the committed weights (PPO-champ-1, the league's first promoted champion), `seed=2026`:
+`poetry run python ppo_tournament.py` plays a round robin of every brain, including earlier PPOBrain versions, with 300 games per pairing (4800 games per brain). Result for the committed weights (PPO-champ-4, the league's final champion):
 
-| Brain | Points per game (95% CI) | W | L | GD |
-| --- | ---: | ---: | ---: | ---: |
-| **PPOBrain (PPO-champ-1)** | **2.09 +/- 0.03** | 2266 | 274 | 4623 |
-| PPO-champ-0 (previous champion) | 2.07 +/- 0.03 | 2216 | 265 | 4708 |
-| PPO-first-it230 (first committed PPOBrain) | 1.96 +/- 0.04 | 2067 | 373 | 3971 |
-| PPO-it120 | 1.84 +/- 0.04 | 1909 | 523 | 3462 |
-| DefendersAndAttackers | 1.79 +/- 0.04 | 1798 | 523 | 2936 |
-| PPO-it80 | 1.71 +/- 0.04 | 1754 | 730 | 2626 |
-| PPO-clone (before PPO) | 1.54 +/- 0.04 | 1544 | 968 | 1668 |
-| StrategicPlanner | 1.46 +/- 0.04 | 1343 | 893 | 1202 |
-| BehindAndTowards | 1.14 +/- 0.04 | 1176 | 1798 | -1122 |
-| AdaptiveChaser | 0.90 +/- 0.04 | 942 | 2264 | -3664 |
-| SimpleBrain | 0.81 +/- 0.04 | 786 | 2329 | -3354 |
-| PPO-scratch (PPO without cloning) | 0.71 +/- 0.03 | 661 | 2455 | -4375 |
-| RandomWalk | 0.44 +/- 0.03 | 328 | 2854 | -6330 |
-| LearningBrain | 0.43 +/- 0.03 | 328 | 2869 | -6351 |
+| Brain | Points per game (95% CI) | Goal difference per game vs PPOBrain |
+| --- | ---: | ---: |
+| PPO-champ-3 | 1.98 +/- 0.03 | -0.04 +/- 0.08 |
+| **PPOBrain (PPO-champ-4)** | **1.98 +/- 0.03** | |
+| PPO-champ-2 | 1.97 +/- 0.03 | -0.06 +/- 0.09 |
+| PPO-champ-1 | 1.94 +/- 0.03 | -0.05 +/- 0.08 |
+| PPO-champ-0 | 1.86 +/- 0.03 | -0.16 +/- 0.08 |
+| PPO-first-it230 (first committed PPOBrain) | 1.74 +/- 0.03 | -0.36 +/- 0.09 |
+| DefendersAndAttackers | 1.63 +/- 0.03 | -0.22 +/- 0.09 |
+| PPO-it120 | 1.61 +/- 0.03 | -0.43 +/- 0.09 |
+| PPO-it80 | 1.53 +/- 0.03 | -0.49 +/- 0.09 |
+| PPO-clone (before PPO) | 1.40 +/- 0.03 | -0.53 +/- 0.11 |
+| StrategicPlanner | 1.32 +/- 0.03 | -0.57 +/- 0.09 |
+| BehindAndTowards | 0.99 +/- 0.04 | -1.47 +/- 0.18 |
+| AdaptiveChaser | 0.79 +/- 0.03 | -2.00 +/- 0.18 |
+| SimpleBrain | 0.71 +/- 0.03 | -2.10 +/- 0.18 |
+| PPO-scratch (PPO without cloning) | 0.57 +/- 0.03 | -3.08 +/- 0.21 |
+| RandomWalk | 0.38 +/- 0.02 | -2.64 +/- 0.18 |
+| LearningBrain | 0.37 +/- 0.02 | -2.53 +/- 0.17 |
 
-PPOBrain tops the table and is significantly stronger head to head than every original brain, including DefendersAndAttackers (goal difference +0.18 +/- 0.08 per game in PPOBrain's favour), and than every earlier PPOBrain version except its immediate predecessor PPO-champ-0 (+0.07 +/- 0.09, not significant).
+PPOBrain is significantly stronger head to head than every original brain, including DefendersAndAttackers, and than every PPOBrain version up to PPO-champ-0. PPO-champ-1 to PPO-champ-4 are the same attacking style at different points in training and are level with each other.
 
 ## League Training: Many Approaches at Once
 
@@ -195,6 +198,16 @@ Every league round pauses training and plays a 5-round Swiss tournament of all e
 poetry run python league.py --hours 8
 tail -f runs/league/progress.log
 ```
+
+A new champion must beat the current one significantly in two consecutive rounds, on fresh games each time. With a single round, picking the best of several candidates promotes luck: PPO-champ-2 and PPO-champ-3 were promoted that way and, in the verdict, were no better than PPO-champ-1. Every promotion starts the full verdict tournament in the background.
+
+What an 18-round league (about 15 hours) showed:
+
+- The explorer settings (more exploration noise, faster learning, more varied opponents) found the breakthrough: a higher-pressing style that takes about twice as many shots. Every champion after PPO-champ-0 comes from that learner.
+- Reward shaping barely mattered: a goals-only learner matched the shaped ones. The first statistics-based reward made its learner worse; the second was neutral.
+- A bigger network (256x256), a longer horizon and a fresh start from the cloned policy did not help.
+- The coach's mixed teams were competitive (they topped the Swiss twice) but never beat the champion head to head.
+- The GA evolved a very different, defensive style that is hard to score against (up to 81% draws) but rarely wins.
 
 `aisoccer/stats.py` records per-game team statistics (possession, territory, shots, spread, passing), and `analyse_stats.py` relates them to winning. Within a matchup, shots and the ball in the opponent's final third go with winning, while being busy on the ball goes with losing, largely because that happens when defending.
 
