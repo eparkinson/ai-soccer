@@ -23,6 +23,7 @@ import numpy as np
 
 from aisoccer.brains.PPOBrain import PPOBrain
 from aisoccer.constants import Constants
+from aisoccer.physics import resolve_contacts
 from aisoccer.vecppo import BatchedPPO
 
 NUM = Constants.NUM_PLAYERS
@@ -52,13 +53,20 @@ RADIUS = np.array(
 )
 FIXED = np.zeros(N_BODIES, dtype=bool)
 FIXED[POSTS] = True
-SPEED_CAPS = np.full(N_BODIES, np.inf)
-SPEED_CAPS[PLAYERS] = Constants.MAX_PLAYER_VELOCITY
-SPEED_CAPS[BALL] = Constants.MAX_BALL_VELOCITY
+
+
+def speed_caps():
+    """Each body's speed cap, from the current Constants (see Constants.set_speed)."""
+    caps = np.full(N_BODIES, np.inf)
+    caps[PLAYERS] = Constants.MAX_PLAYER_VELOCITY
+    caps[BALL] = Constants.MAX_BALL_VELOCITY
+    return caps
+
 
 # Collision constants (see PhyState._collide).
 _MASS = RADIUS**2
-REACH_SQ = (RADIUS[:, None] + RADIUS[None, :]) ** 2
+REACH = RADIUS[:, None] + RADIUS[None, :]
+REACH_SQ = REACH**2
 IMPULSE = np.where(
     FIXED[None, :], 2.0, 2.0 * _MASS[None, :] / (_MASS[:, None] + _MASS[None, :])
 )
@@ -108,6 +116,11 @@ class VecGame:
         self.score = np.zeros((n, 2), dtype=int)  # blue, red
         self.last_goal_tick = np.zeros(n, dtype=int)
         self.ticks = 0
+        # The game speed is read when the VecGame is made (Constants.set_speed).
+        self.speed_scale = Constants.SPEED_SCALE
+        self.substeps = Constants.SUBSTEPS
+        self.max_acceleration = Constants.MAX_ACCELERATION
+        self.speed_caps = speed_caps()
         for g in range(n):
             self.kick_off(g)
 
@@ -135,7 +148,7 @@ class VecGame:
         """Everyone back to the kick-off positions and a small random nudge to the ball (Game.start)."""
         self.pos[g] = KICK_OFF
         self.vel[g] = 0.0
-        self.vel[g, BALL] = self.rngs[g].random(2) - 0.5
+        self.vel[g, BALL] = (self.rngs[g].random(2) - 0.5) * self.speed_scale
 
     def play(self):
         """Play every game to the end and return their scores as Game.play does."""
@@ -163,12 +176,17 @@ class VecGame:
         self.step_physics()
         self.ticks += 1
 
-    def check_goals(self):
+    def goals(self):
+        """Per game: has red scored (ball wholly over blue's line, in the mouth), has blue."""
         x, y = self.pos[:, BALL, 0], self.pos[:, BALL, 1]
         mouth = (Constants.GOAL_Y_MIN < y) & (y < Constants.GOAL_Y_MAX)
         red = (x < Constants.GOAL_DEPTH - Constants.BALL_RADIUS) & mouth
         goal_line = Constants.FIELD_LENGTH - 1 - Constants.GOAL_DEPTH
         blue = ~red & (x > goal_line + Constants.BALL_RADIUS) & mouth
+        return red, blue
+
+    def check_goals(self):
+        red, blue = self.goals()
         if not (red.any() or blue.any()):
             return
         for g in np.flatnonzero(red | blue):
@@ -253,32 +271,83 @@ class VecGame:
         return moves
 
     def apply_moves(self, moves):
-        """Team.apply_move for every seat: scrub NaN/inf, cap each acceleration at 1, add to velocity."""
+        """Team.apply_move for every seat: scrub NaN/inf, cap each acceleration at MAX_ACCELERATION, add to velocity."""
         moves[:, 1, :, 0] = -moves[
             :, 1, :, 0
         ]  # red's moves back into the real field (flip_acc)
         if not np.isfinite(moves).all():
             moves = np.nan_to_num(moves, nan=0.0, posinf=0.0, neginf=0.0)
+        cap = self.max_acceleration
         norms = np.linalg.norm(moves, axis=-1, keepdims=True)
-        capped = np.where(norms > 1, moves / np.maximum(norms, 1), moves)
+        capped = np.where(norms > cap, moves / np.maximum(norms, cap) * cap, moves)
         self.vel[:, PLAYERS] = self.vel[:, PLAYERS] + capped.reshape(self.n, 2 * NUM, 2)
 
     def limit_velocities(self):
         vel = self.vel
         speed = np.hypot(vel[..., 0], vel[..., 1])
-        too_fast = speed > SPEED_CAPS
+        too_fast = speed > self.speed_caps
         if too_fast.any():
-            caps = np.broadcast_to(SPEED_CAPS, speed.shape)
+            caps = np.broadcast_to(self.speed_caps, speed.shape)
             vel[too_fast] *= (caps[too_fast] / speed[too_fast])[:, None]
 
     def step_physics(self):
-        """PhyState.tick for every game: collisions, then walls, then move."""
-        pos = self.pos
-        vel = self.collide(pos, self.vel)
-        vel = self.bounce_walls(pos, vel)
-        vel[:, FIXED] = 0.0
-        self.pos = pos + vel
-        self.vel = vel
+        """
+        PhyState.tick for every game: per sub-step, collisions, then walls, then move.
+        As in Game, a game whose ball is in a goal after a sub-step skips the rest of
+        the tick's sub-steps (its bodies stay where they are).
+        """
+        substeps = self.substeps
+        if substeps == 1:
+            pos = self.pos
+            vel = self.collide(pos, self.vel)
+            vel = self.bounce_walls(pos, vel)
+            vel[:, FIXED] = 0.0
+            self.pos = pos + vel
+            self.vel = vel
+            return
+        dt = 1.0 / substeps
+        for s in range(substeps):
+            pos = self.pos
+            vel, shift = self.collide_swept(pos, self.vel, dt)
+            vel = self.bounce_walls(pos, vel)
+            vel[:, FIXED] = 0.0
+            new_pos = pos + vel * dt + shift
+            if s > 0:
+                red, blue = self.goals()  # a stopped game's ball stays in the goal
+                moving = ~(red | blue)[:, None, None]
+                new_pos = np.where(moving, new_pos, pos)
+                vel = np.where(moving, vel, self.vel)
+            self.pos = new_pos
+            self.vel = vel
+
+    @staticmethod
+    def collide_swept(pos, vel, dt):
+        """
+        PhyState._collide_swept over a leading game axis: the same arithmetic, done
+        only for pairs close enough to touch within the sub-step. Returns the new
+        velocities and the position corrections.
+        """
+        pdiff = pos[:, :, None, :] - pos[:, None, :, :]
+        dist_sq = np.einsum("nijk,nijk->nij", pdiff, pdiff)
+        # Candidates: pairs that could touch this sub-step (a generous bound: two
+        # bodies close by at most twice the game's top speed times dt). Every pair
+        # that hits is among them; the exact test below picks the hits.
+        top_speed = np.hypot(vel[..., 0], vel[..., 1]).max(axis=1)
+        bound = REACH[None] + (2.0 * dt * top_speed + 1.0)[:, None, None]
+        near = (dist_sq <= bound * bound) & CAN_HIT
+        shift = np.zeros_like(vel)
+        if not near.any():
+            return vel, shift
+        g, i, j = np.nonzero(near)
+        hit, dv, correction = resolve_contacts(
+            pdiff[g, i, j], vel[g, i] - vel[g, j], REACH_SQ[i, j], IMPULSE[i, j], dt
+        )
+        if dv is None:
+            return vel, shift
+        impulse = np.zeros_like(vel)
+        np.add.at(impulse, (g[hit], i[hit]), dv)
+        np.add.at(shift, (g[hit], i[hit]), correction)
+        return vel - impulse, shift
 
     @staticmethod
     def collide(pos, vel):

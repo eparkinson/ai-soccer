@@ -29,8 +29,8 @@ DefendersAndAttackers (Blue): Employs a more complicated strategy with defenders
 
 ## Rules of the game
 - Two teams of 5 players. Blue defends the left goal, red the right.
-- Each goal is a 300 pixel gap (the goal mouth) in the goal line, with a post at each end. Outside the mouth the goal line is a wall. A goal is scored when the whole ball crosses the line inside the mouth.
-- Every tick, each brain returns an acceleration for each of its players. Accelerations are capped at 1 and speeds at 5 (players) and 10 (ball).
+- Each goal is a 400 pixel gap (the goal mouth) in the goal line, with a post at each end. Outside the mouth the goal line is a wall. A goal is scored when the whole ball crosses the line inside the mouth.
+- Every tick, each brain returns an acceleration for each of its players. Accelerations are capped at 1.5 and speeds at 7.5 (players) and 15 (ball): the original 1, 5 and 10 times `SPEED_SCALE`.
 - Collisions are elastic, with mass proportional to radius squared. Posts do not move.
 - After a goal, play restarts from the kick-off positions with the ball given a small random nudge.
 
@@ -160,7 +160,7 @@ This is why the training evaluations use 48-144 games per opponent and why `ppo_
 
 ### Result
 
-`poetry run python ppo_tournament.py` plays a round robin of every brain, including earlier PPOBrain versions, with 300 games per pairing (4800 games per brain). Result for the committed weights (PPO-champ-4, the league's final champion):
+`poetry run python ppo_tournament.py` plays a round robin of every brain, including earlier PPOBrain versions, with 300 games per pairing (4800 games per brain). Result for PPO-champ-4, the final champion of that first league (now `aisoccer/brains/weights/history/PPO-champ-4.npz`; the committed `PPOBrain.npz` has since become the league-3 champion, see [League 3](#league-3-learning-from-zero)):
 
 | Brain | Points per game (95% CI) | Goal difference per game vs PPOBrain |
 | --- | ---: | ---: |
@@ -210,6 +210,39 @@ What an 18-round league (about 15 hours) showed:
 - The GA evolved a very different, defensive style that is hard to score against (up to 81% draws) but rarely wins.
 
 `aisoccer/stats.py` records per-game team statistics (possession, territory, shots, spread, passing), and `analyse_stats.py` relates them to winning. Within a matchup, shots and the ball in the opponent's final third go with winning, while being busy on the ball goes with losing, largely because that happens when defending.
+
+## League 3: learning from zero
+
+The third league started every brain from nothing and measured two things: how good each approach got against a yardstick nobody trains against (DefendersAndAttackers), and what it cost in compute. It is written up in two blog posts:
+
+- [AI Soccer, part 1: a small game for testing bot players](https://www.softwarependula.net/post/ai-soccer-part-1/)
+- [AI Soccer, part 2: learning brains and what they cost](https://www.softwarependula.net/post/ai-soccer-part-2/)
+
+Where the code is:
+
+| What | Where |
+| --- | --- |
+| The league: rounds, title race, cost ledger, core allocation | `league.py`, `leaguefiles.py`, `league_table.py`, `aisoccer/balance.py` |
+| LLM line: brains written by Claude, version 1 to 11 | `aisoccer/llm/` (`CHANGELOG.md` records what each version saw and changed) |
+| Genetic programming: evolved programs in three languages | `aisoccer/gp/`, `evolve_gp.py` |
+| PPO with the newer inputs (obs v2), batched simulator | `aisoccer/brains/PPOBrain.py`, `aisoccer/vecgame.py`, `aisoccer/vecppo.py`, `train_ppo.py` |
+| Tactics: the one-shot hand-designed brain | `aisoccer/tactics/` |
+| Yardstick benchmark | `benchmark.py` |
+
+The rules changed along the way: the goal was widened from 300 to 400 pixels (five players side by side could seal the old one), and the game runs 1.5 times faster per tick with two physics sub-steps.
+
+`aisoccer/brains/weights/PPOBrain.npz` is the league's final champion, PPO-champ-11. To replay the game featured in part 2, in which it beats LLM-v11 3–2:
+
+```python
+from aisoccer.brainspec import load_brain
+from aisoccer.game import Game
+
+champion = load_brain("aisoccer/brains/weights/PPOBrain.npz", "PPO-champ-11")
+llm_v11 = load_brain("brain:aisoccer.llm.v11.LLMBrainV11", "LLM-v11")
+print(Game(champion, llm_v11, game_length=6000, quiet_mode=True, seed=704).play())
+```
+
+`blog3.md` is the working log the league wrote as it ran, round by round.
 
 ## Design Documents
 

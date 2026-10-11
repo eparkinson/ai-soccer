@@ -78,7 +78,8 @@ class Game:
             self.state.add_body(post)
 
         self.state.add_body(self.ball.body)
-        self.ball.body.velocity = self.rng.random(2) - 0.5
+        # A small random nudge to the ball, as fast as the rest of the game.
+        self.ball.body.velocity = (self.rng.random(2) - 0.5) * Constants.SPEED_SCALE
 
     def tick(self):
         if self.game_length != 0 and self.state.ticks >= self.game_length:
@@ -94,7 +95,10 @@ class Game:
         else:
             self.run_brains()
             self.limit_velocities()
-            self.state.tick()
+            substeps = Constants.SUBSTEPS
+            # Stop the tick's sub-steps as soon as the ball is in a goal (scored at the
+            # start of the next tick), so it cannot bounce back out within the tick.
+            self.state.tick(substeps, self.ball_in_goal if substeps > 1 else None)
             return GameResult.nothing
 
     def goal(self, scoring_team):
@@ -125,6 +129,9 @@ class Game:
         x, y = self.ball.body.position
         goal_line = Constants.FIELD_LENGTH - 1 - Constants.GOAL_DEPTH
         return x > goal_line + Constants.BALL_RADIUS and self.in_goal_mouth(y)
+
+    def ball_in_goal(self):
+        return self.is_red_goal() or self.is_blue_goal()
 
     @staticmethod
     def in_goal_mouth(y):

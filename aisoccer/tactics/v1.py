@@ -48,6 +48,13 @@ DEFAULT_STRATEGY = {
 DECISION_TICKS = 10
 PATH_TICKS = 90
 
+# Candidate aims for best_reachable_kick (constants, computed once).
+_GOAL_MARGIN = skills.BALL_R + Constants.POST_RADIUS + 8
+GOAL_AIMS_Y = np.linspace(skills.GOAL_Y_MIN + _GOAL_MARGIN, skills.GOAL_Y_MAX - _GOAL_MARGIN, 5)
+SPACE_DIRECTIONS = [
+    (float(np.cos(angle)), float(np.sin(angle))) for angle in np.radians(np.arange(-60, 61, 20))
+]
+
 
 class TacticsV1(AbstractBrain):
     """
@@ -81,14 +88,8 @@ class TacticsV1(AbstractBrain):
 
     def assign(self, s, ball_path):
         mine, opp = self.my_players_pos, self.opp_players_pos
-        my_times = [
-            skills.intercept(mine[i], self.my_players_vel[i], ball_path)[0]
-            for i in range(NUM)
-        ]
-        opp_times = [
-            skills.intercept(opp[i], self.opp_players_vel[i], ball_path)[0]
-            for i in range(NUM)
-        ]
+        my_times = skills.intercepts(mine, self.my_players_vel, ball_path)
+        opp_times = skills.intercepts(opp, self.opp_players_vel, ball_path)
         plan: list = [None] * NUM
 
         keeper = int(np.argmin(mine[:, 0]))  # deepest player keeps goal
@@ -152,21 +153,21 @@ class TacticsV1(AbstractBrain):
         to_goal = skills.GOAL_LINE - ball[0]
 
         # Contested: an opponent gets there about as soon as we do. No time to line up.
-        mine_t, _ = skills.intercept(pos, vel, ball_path)
-        theirs_t = min(
-            skills.intercept(opp[j], self.opp_players_vel[j], ball_path)[0]
-            for j in range(NUM)
+        # (Where we meet the ball, ball_then, is passed on so no skill recomputes it.)
+        times = skills.intercepts(
+            [pos, *opp], [vel, *self.opp_players_vel], ball_path
         )
+        mine_t, theirs_t = times[0], min(times[1:])
+        ball_then = ball_path[mine_t]
         if theirs_t <= mine_t + 4:
-            return skills.tackle(pos, vel, ball, ball_vel, ball_path)
+            return skills.tackle(pos, vel, ball, ball_vel, ball_path, ball_then)
 
         if s["opportunistic"] >= 0.5:
-            _, ball_then = skills.intercept(pos, vel, ball_path)
             best = self.best_reachable_kick(i, s, np.asarray(ball_then))
             if best is not None:
                 direction, power = best
                 return skills.kick(
-                    pos, vel, ball, ball_vel, direction, power, ball_path
+                    pos, vel, ball, ball_vel, direction, power, ball_path, ball_then
                 )
             # Nothing worth kicking at from here: reposition, heading for a shot.
             return skills.kick(
@@ -177,6 +178,7 @@ class TacticsV1(AbstractBrain):
                 skills.shot_direction(ball, None, opp),
                 1.0,
                 ball_path,
+                ball_then,
             )
 
         if to_goal < 300 + 1000 * s["shoot_range"]:
@@ -193,6 +195,7 @@ class TacticsV1(AbstractBrain):
                     skills.shot_direction(ball, target_y),
                     1.0,
                     ball_path,
+                    ball_then,
                 )
 
         if (
@@ -214,7 +217,7 @@ class TacticsV1(AbstractBrain):
                     0.6 + 0.4 * s["power"]
                 )
                 return skills.kick(
-                    pos, vel, ball, ball_vel, lead - ball, power, ball_path
+                    pos, vel, ball, ball_vel, lead - ball, power, ball_path, ball_then
                 )
 
         # Carry: towards goal, angled away from the nearest opponent.
@@ -225,7 +228,14 @@ class TacticsV1(AbstractBrain):
             direction + 0.3 * away * (np.linalg.norm(nearest - ball) < 150)
         )
         return skills.kick(
-            pos, vel, ball, ball_vel, direction, 0.3 + 0.4 * s["power"], ball_path
+            pos,
+            vel,
+            ball,
+            ball_vel,
+            direction,
+            0.3 + 0.4 * s["power"],
+            ball_path,
+            ball_then,
         )
 
     def best_reachable_kick(self, i, s, ball):
@@ -239,40 +249,59 @@ class TacticsV1(AbstractBrain):
         Candidates: the goal (direct, or off a side wall), a teammate, or space.
         Returns (direction, power), or None if nothing reachable is worth it.
         """
+        # Plain floats for the 2-vector arithmetic below: the same IEEE operations as
+        # numpy's (np.dot and np.linalg.norm of 2-vectors round alike), but quicker.
         pos = self.my_players_pos[i]
         opp = self.opp_players_pos
-        approach = skills.unit(ball - pos)
-        candidates = []  # (value, target point, power)
+        bx, by = ball.tolist()
+        ax, ay = skills.unit(ball - pos).tolist()  # the approach direction
+        widest = np.cos(np.radians(30 + 60 * s["max_angle"]))
+        best, best_score = None, 0.05
+
+        # Candidates are considered in a fixed order; the first with the highest score
+        # wins. Only kicks reachable without repositioning count, so that is checked
+        # first and the (slower) valuation skipped for the others.
+        def reach(tx, ty):
+            """(direction, straightness) of a kick at (tx, ty), or None if out of reach."""
+            dx, dy = tx - bx, ty - by
+            n = skills.length(dx, dy)
+            dx, dy = (dx / n, dy / n) if n > 1e-9 else (0.0, 0.0)  # as skills.unit
+            straightness = ax * dx + ay * dy
+            if straightness < widest:
+                return None  # not reachable without repositioning
+            return (dx, dy), straightness
+
+        def consider(reached, value, power):
+            nonlocal best, best_score
+            direction, straightness = reached
+            score = value * straightness**2
+            if score > best_score:
+                best, best_score = (np.array(direction), power), score
 
         shoot_reach = 300 + 1000 * s["shoot_range"]
-        margin = skills.BALL_R + Constants.POST_RADIUS + 8
-        for y in np.linspace(skills.GOAL_Y_MIN + margin, skills.GOAL_Y_MAX - margin, 5):
-            goal = np.array([skills.GOAL_LINE + 20, y])
-            distance = np.linalg.norm(goal - ball)
-            if distance < shoot_reach:
-                clear = skills.lane_clearance(ball, goal, opp)
+        gx = skills.GOAL_LINE + 20
+        for y in GOAL_AIMS_Y.tolist():
+            distance = skills.length(gx - bx, y - by)
+            if distance < shoot_reach and (reached := reach(gx, y)):
+                clear = skills.lane_clearance(ball, np.array([gx, y]), opp)
                 value = (
                     5
                     * s["w_goal"]
                     * (1 - distance / shoot_reach)
                     * min(clear / 60, 1.0)
                 )
-                candidates.append((value, goal, 1.0))
+                consider(reached, value, 1.0)
             # Bank shot: aim at the goal's mirror image beyond a side wall.
             for wall in (skills.BALL_R, H - skills.BALL_R):
-                mirror = np.array([goal[0], 2 * wall - y])
-                path = np.linalg.norm(mirror - ball)
+                my = 2 * wall - y  # the mirror image is (gx, my)
+                path = skills.length(gx - bx, my - by)
                 if path < shoot_reach:
-                    frac = (
-                        (wall - ball[1]) / (mirror[1] - ball[1])
-                        if mirror[1] != ball[1]
-                        else 2.0
-                    )
-                    if 0 < frac < 1:
-                        bounce = ball + (mirror - ball) * frac
+                    frac = (wall - by) / (my - by) if my != by else 2.0
+                    if 0 < frac < 1 and (reached := reach(gx, my)):
+                        bounce = np.array([bx + (gx - bx) * frac, by + (my - by) * frac])
                         clear = min(
                             skills.lane_clearance(ball, bounce, opp),
-                            skills.lane_clearance(bounce, goal, opp),
+                            skills.lane_clearance(bounce, np.array([gx, y]), opp),
                         )
                         value = (
                             5
@@ -280,14 +309,15 @@ class TacticsV1(AbstractBrain):
                             * (1 - path / shoot_reach)
                             * min(clear / 60, 1.0)
                         )
-                        candidates.append((value, mirror, 1.0))
+                        consider(reached, value, 1.0)
 
         for j in range(NUM):
             if j == i:
                 continue
             lead = self.my_players_pos[j] + self.my_players_vel[j] * 15
-            gain = (lead[0] - ball[0]) / L
-            if gain < -0.05:
+            lx, ly = lead.tolist()
+            gain = (lx - bx) / L
+            if gain < -0.05 or not (reached := reach(lx, ly)):
                 continue
             clear = skills.lane_clearance(ball, lead, opp)
             if clear > 50:
@@ -298,28 +328,19 @@ class TacticsV1(AbstractBrain):
                     * (0.5 + s["pass_bias"])
                     * min(clear / 120, 1.0)
                 )
-                power = float(np.clip(np.linalg.norm(lead - ball) / 900, 0.3, 1.0)) * (
-                    0.6 + 0.4 * s["power"]
-                )
-                candidates.append((value, lead, power))
+                distance = skills.length(lx - bx, ly - by)
+                power = min(max(distance / 900, 0.3), 1.0) * (0.6 + 0.4 * s["power"])
+                consider(reached, value, power)
 
-        for angle in np.radians(np.arange(-60, 61, 20)):
-            target = ball + np.array([np.cos(angle), np.sin(angle)]) * 300
-            target = np.clip(target, [40, 40], [L - 40, H - 40])
-            free = np.min(np.linalg.norm(opp - target, axis=1))
-            value = s["w_space"] * ((target[0] - ball[0]) / 300) * min(free / 200, 1.0)
-            candidates.append((value, target, 0.3 + 0.4 * s["power"]))
-
-        best, best_score = None, 0.05
-        widest = np.cos(np.radians(30 + 60 * s["max_angle"]))
-        for value, target, power in candidates:
-            direction = skills.unit(target - ball)
-            straightness = float(np.dot(approach, direction))
-            if straightness < widest:
-                continue  # not reachable without repositioning
-            score = value * straightness**2
-            if score > best_score:
-                best, best_score = (direction, power), score
+        for cx, cy in SPACE_DIRECTIONS:
+            # 300 px along the direction, kept 40 px inside the field.
+            tx = min(max(bx + cx * 300, 40.0), L - 40.0)
+            ty = min(max(by + cy * 300, 40.0), H - 40.0)
+            if not (reached := reach(tx, ty)):
+                continue
+            free = np.min(skills.norms(opp - np.array([tx, ty])))
+            value = s["w_space"] * ((tx - bx) / 300) * min(free / 200, 1.0)
+            consider(reached, value, 0.3 + 0.4 * s["power"])
         return best
 
     def do_move(self):
@@ -335,7 +356,12 @@ class TacticsV1(AbstractBrain):
             pos, vel = self.my_players_pos[i], self.my_players_vel[i]
             if skill == "keep":
                 moves[i] = skills.keep_goal(
-                    pos, vel, ball, self.ball_vel, depth=150 * s["keeper_depth"]
+                    pos,
+                    vel,
+                    ball,
+                    self.ball_vel,
+                    depth=150 * s["keeper_depth"],
+                    ball_path=ball_path,
                 )
             elif skill == "ball":
                 moves[i] = self.ball_action(i, s, ball_path)

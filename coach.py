@@ -1,17 +1,24 @@
 """
-The coach: builds a mixed PPOBrain team, one trained brain per player role.
+The coach: picks a team of five players from the league's recent players, of any kind.
 
-Every player role (0-4) can use the policy of a different trained brain: the league
-learners, the champions and earlier saved PPOBrain versions. The coach starts from the
-current champion and keeps proposing swaps ("play role 3 with learner C's policy"). A
-swap is kept only if the new team beats the current team head to head over --games
-games (by more than one standard error, on shared kick-offs).
+Role i of the team plays as player i of the brain chosen for that role (a network, an
+LLMBrain version, a GP program...; see aisoccer/brains/CompositeBrain.py). Roles name
+brains, not frozen copies: every new league round, each role switches to its brain's
+latest snapshot, so the team keeps up as its players improve.
 
-The current team is written to runs/league/coach/team.npz, a normal PPOBrain weights
-file, and plays in every league round as the entrant "Coach". league.py starts, pauses
-and stops this process alongside the learners.
+Players are chosen by statistics. Every new round the coach scouts: each recent brain
+plays --scout-games recorded games (against the champion and other recent brains), and
+every player is rated by the value of its touches (aisoccer/player_value.py: how much
+each touch changes the team's chance of scoring next). The ratings go to
+player_ratings.json. The coach then proposes, role by role, the best-rated player for
+that role, biggest expected gain first; a swap is kept only if the new team beats the
+current team head to head over --games games (by more than one standard error, on
+shared kick-offs), since a player's value can depend on the teammates it is used to.
 
-    poetry run python coach.py --workers 4
+The team is written to runs/league/coach/team-spec.json (a brain spec) and plays in every
+league round as the entrant "Coach"; team.json lists the role brains for the league log.
+
+    poetry run python coach.py --workers 2
 """
 
 import argparse
@@ -19,15 +26,20 @@ import json
 import os
 import time
 from multiprocessing import Pool
-from pathlib import Path
 
 import numpy as np
 
-from aisoccer.brains.PPOBrain import PPOBrain
-from league import HISTORY_DIR, LEAGUE_DIR, play, record
+from aisoccer import player_value
+from aisoccer.brainspec import load_brain
+from aisoccer.game import Game
+from league import HISTORY_DIR, LEAGUE_DIR, record, record_showcase
 
 COACH_DIR = LEAGUE_DIR / "coach"
 LOG_FILE = COACH_DIR / "progress.log"
+STATE_FILE = COACH_DIR / "state.json"
+SPEC_FILE = COACH_DIR / "team-spec.json"
+TICKS = 9000
+TOP = 8  # swaps are drawn from the latest round's top brains
 
 
 def log(message=""):
@@ -36,116 +48,181 @@ def log(message=""):
         f.write(message + "\n")
 
 
-def sources():
-    """Brains whose role policies the coach can use: label -> weights path."""
-    found = {}
-    for path in sorted(LEAGUE_DIR.glob("*/policy.npz")):
-        found[f"learner {path.parent.name}"] = path
-    for path in sorted(HISTORY_DIR.glob("*.npz")):
-        weights = PPOBrain.load_weights(path)
-        if (
-            weights.get("action_repeat", 2) == PPOBrain.ACTION_REPEAT
-            and "role_policies" not in weights
-        ):
-            found[path.stem] = path
-    return found
+def recent_players():
+    """The latest round: its number and {name: spec} for its players, best first."""
+    rounds = sorted((LEAGUE_DIR / "rounds").glob("round-*.json"))
+    if not rounds:
+        return None, {}
+    results = json.loads(rounds[-1].read_text())
+    number = results["round"]
+    roster = json.loads((LEAGUE_DIR / "roster.json").read_text())
+    players = {}
+    for row in results["standings"]:
+        name = row["name"]
+        if name == "Coach" or "champ-" in name:
+            continue  # not itself, and past champions are old snapshots, not recent players
+        snaps = sorted((LEAGUE_DIR / "snapshots").glob(f"{name}-r{number:03d}.*"))
+        spec = (  # a snapshot, or a spec-only brain's spec (also if it was retired since)
+            str(snaps[0]) if snaps
+            else roster.get("fixed_entrants", {}).get(name) or roster.get("retired", {}).get(name, {}).get("spec")
+        )
+        if spec:
+            players[name] = spec
+    return number, players
 
 
-def build(team):
-    """team: list of (label, policy params) per role -> PPOBrain weights dict."""
-    return {
-        "policy": team[0][1],
-        "log_std": np.full(2, -1.0),
-        "role_policies": [params for _, params in team],
-    }
+def team_spec(roles, players):
+    return {"class": "aisoccer.brains.CompositeBrain.CompositeBrain", "kwargs": {"roles": [players[n] for n in roles]}}
 
 
-def save_team(team, path):
+def write_team(roles, players, path=SPEC_FILE):
     """Write atomically: league.py may copy the team file at any time."""
-    tmp = Path(path).with_name(Path(path).stem + ".tmp.npz")
-    PPOBrain.save_weights(tmp, build(team))
+    tmp = path.with_name(path.stem + ".tmp.json")
+    tmp.write_text(json.dumps(team_spec(roles, players)))
     os.replace(tmp, path)
+    if path == SPEC_FILE:
+        (COACH_DIR / "team.json").write_text(json.dumps(roles))
 
 
-def head_to_head(workers, candidate_path, current_path, games, seed):
-    seeds = np.random.default_rng(seed).integers(2**31, size=games)
-    tasks = [
-        (str(candidate_path), str(current_path), g % 2 == 0, int(seeds[g]))
-        for g in range(games)
+def play(task):
+    candidate, current, candidate_blue, seed = task
+    a, b = load_brain(candidate, "candidate"), load_brain(current, "current")
+    blue, red = (a, b) if candidate_blue else (b, a)
+    score = Game(blue, red, game_length=TICKS, quiet_mode=True, seed=seed).play()
+    return (score["blue"], score["red"]) if candidate_blue else (score["red"], score["blue"])
+
+
+def scout(workers, players, number, games, rng):
+    """Record games of every recent brain and rate each brain's five players by role."""
+    champions = sorted(HISTORY_DIR.glob("*champ-*.*"), key=lambda p: int(p.stem.split("-")[-1]))
+    champion = str(champions[-1]) if champions else None
+    names = list(players)
+    tasks = []
+    for name in names:
+        for g in range(games):
+            if champion and g < games // 2:
+                other_name, other = "champion", champion
+            else:
+                other_name = names[int(rng.integers(len(names)))]
+                other = players[other_name]
+            seed = int(rng.integers(2**31))
+            blue = g % 2 == 0
+            tasks.append(
+                (name, players[name], other_name, other, seed, TICKS) if blue
+                else (other_name, other, name, players[name], seed, TICKS)
+            )
+    recorded = workers.map(record_showcase, tasks, chunksize=1)
+    value_map = player_value.fit_value_map([(r["positions"], r["scores"]) for r in recorded])
+    rated = [
+        (r["names"][k], side, r["positions"], r["scores"])
+        for r in recorded for k, side in enumerate(("blue", "red"))
+        if r["names"][k] in players
     ]
-    return record(workers.map(play, tasks, chunksize=4))
+    ratings = player_value.ratings(rated, value_map)
+    out = {
+        "round": number,
+        "games": len(recorded),
+        "value_map": value_map.round(3).tolist(),
+        "ratings": {n: [round(float(v), 3) for v in r] for n, r in ratings.items()},
+        # Football statistics per role per 9000 ticks: goals, assists, shots on target,
+        # saves, own goals (for the reports; selection uses the touch value above).
+        "stats": player_value.event_stats(rated),
+        # Where each player usually is: its mean distance up the pitch from its own goal (0-1).
+        "position": average_positions(rated),
+    }
+    (COACH_DIR / "player_ratings.json").write_text(json.dumps(out, indent=1))
+    return ratings
+
+
+def average_positions(rated):
+    sums, counts = {}, {}
+    for name, side, positions, _ in rated:
+        x = player_value.perspective(positions, side)[:, :5, 0].mean(axis=0) / player_value.L
+        sums[name] = sums.get(name, 0) + x
+        counts[name] = counts.get(name, 0) + 1
+    return {n: [round(float(v), 2) for v in sums[n] / counts[n]] for n in sums}
+
+
+def proposals(roles, ratings):
+    """Swaps worth testing: the best-rated player for each role, biggest expected gain first."""
+    out = []
+    for role in range(5):
+        best = max(ratings, key=lambda n: ratings[n][role])
+        current = ratings.get(roles[role], [0.0] * 5)[role]
+        gain = ratings[best][role] - current
+        if best != roles[role] and gain > 0:
+            out.append((gain, role, best))
+    return sorted(out, reverse=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument(
-        "--games", type=int, default=200, help="games per proposed swap"
-    )
-    parser.add_argument(
-        "--start", type=Path, help="team to start from (default: newest champion)"
-    )
+    parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--games", type=int, default=48, help="games per proposed swap")
+    parser.add_argument("--scout-games", type=int, default=8, help="recorded games per brain per round")
     args = parser.parse_args()
-
     COACH_DIR.mkdir(parents=True, exist_ok=True)
-    team_file = COACH_DIR / "team.npz"
-    labels_file = COACH_DIR / "team.json"
     rng = np.random.default_rng(int(time.time()))
 
-    if team_file.exists() and labels_file.exists():
-        weights = PPOBrain.load_weights(team_file)
-        labels = json.loads(labels_file.read_text())
-        team = list(zip(labels, weights["role_policies"]))
-        log(f"Coach resumed with team {labels}")
+    number, players = recent_players()
+    while not players:  # before the first saved round
+        time.sleep(60)
+        number, players = recent_players()
+    state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    if state.get("roles") and all(n in players for n in state["roles"]):
+        roles, proposal = state["roles"], state.get("proposal", 0)
+        log(f"Coach resumed with team {roles}")
     else:
-        champions = sorted(
-            HISTORY_DIR.glob("PPO-champ-*.npz"),
-            key=lambda p: int(p.stem.split("-")[-1]),
-        )
-        start = args.start or (champions[-1] if champions else None)
-        while start is None:  # a league starting from zero: wait for a learner's network
-            found = sources()
-            start = Path(next(iter(found.values()))) if found else None
-            if start is None:
-                time.sleep(30)
-        policy = PPOBrain.load_weights(start)["policy"]
-        start_label = f"learner {start.parent.name}" if start.stem == "policy" else start.stem
-        team = [(start_label, policy)] * 5
-        save_team(team, team_file)
-        labels_file.write_text(json.dumps([label for label, _ in team]))
-        log(f"Coach started from {start_label} in every role")
+        roles, proposal = [next(iter(players))] * 5, state.get("proposal", 0)
+        log(f"Coach started from round {number}'s top brain in every role: {roles}")
+    write_team(roles, players)
 
-    proposal = 0
+    def save_state():
+        STATE_FILE.write_text(json.dumps({"roles": roles, "proposal": proposal, "round": number}))
+
+    save_state()
     with Pool(args.workers) as workers:
+        scouted = None
+        queue = []
         while True:
-            available = sources()
-            role = int(rng.integers(5))
-            options = [s for s in available if s != team[role][0]]
-            if not options:
-                time.sleep(60)
+            latest, players = recent_players()
+            if latest != number:  # a new round: every role moves to its brain's latest snapshot
+                number = latest
+                best = next(iter(players))
+                gone = [n for n in roles if n not in players]
+                roles = [n if n in players else best for n in roles]
+                write_team(roles, players)
+                log(f"round {number}: team refreshed to the latest snapshots"
+                    + (f" (replaced {gone} with {best})" if gone else "") + f": {roles}")
+                save_state()
+            if scouted != number:
+                ratings = scout(workers, players, number, args.scout_games, rng)
+                scouted = number
+                best_per_role = [max(ratings, key=lambda n: ratings[n][r]) for r in range(5)]
+                log(f"round {number} scouting: best player per role "
+                    + ", ".join(f"{r}: {n} {ratings[n][r]:+.2f}" for r, n in enumerate(best_per_role)))
+                queue = proposals(roles, ratings)
+            if not queue:
+                time.sleep(60)  # nothing worth testing until the next round's scouting
                 continue
-            source = options[int(rng.integers(len(options)))]
-            params = PPOBrain.load_weights(available[source])["policy"]
-            candidate = list(team)
-            candidate[role] = (source, params)
-            candidate_file = COACH_DIR / "candidate.npz"
-            save_team(candidate, candidate_file)
-
+            gain, role, source = queue.pop(0)
+            candidate = list(roles)
+            candidate[role] = source
+            candidate_file = COACH_DIR / "candidate.json"
+            write_team(candidate, players, candidate_file)
             proposal += 1
-            result = head_to_head(
-                workers, candidate_file, team_file, args.games, seed=proposal
-            )
-            se = result["gd_ci"] / 1.96
-            kept = result["gd"] - se > 0
-            log(
-                f"proposal {proposal:3d}: role {role} <- {source:<16} vs current team "
-                f"GD {result['gd']:+.2f} ±{result['gd_ci']:.2f}  {'KEPT' if kept else 'rejected'}"
-            )
+            seeds = np.random.default_rng(proposal).integers(2**31, size=args.games)
+            tasks = [(str(candidate_file), str(SPEC_FILE), g % 2 == 0, int(seeds[g])) for g in range(args.games)]
+            result = record(workers.map(play, tasks, chunksize=2))
+            kept = result["gd"] - result["gd_ci"] / 1.96 > 0
+            log(f"proposal {proposal:4d}: role {role} <- {source:<16} (rating gain {gain:+.2f}) vs current team "
+                f"GD {result['gd']:+.2f} ±{result['gd_ci']:.2f}  {'KEPT' if kept else 'rejected'}")
             if kept:
-                team = candidate
-                save_team(team, team_file)
-                labels_file.write_text(json.dumps([label for label, _ in team]))
-                log(f"  team now: {[label for label, _ in team]}")
+                roles = candidate
+                write_team(roles, players)
+                log(f"  team now: {roles}")
+                queue = proposals(roles, ratings)
+            save_state()
 
 
 if __name__ == "__main__":

@@ -19,9 +19,14 @@ from aisoccer.vecppo import TERMS, batch_player_features, batch_potential_terms
 from tests.test_ppo import reference_player_features
 
 
+# A trained network with the original (v1) inputs: the league-1 champion. The default
+# PPOBrain.npz is whichever network the league crowned last, so it may use newer inputs.
+V1_WEIGHTS_FILE = PPOBrain.WEIGHTS_FILE.parent / "history" / "PPO-champ-4.npz"
+
+
 def trained_weights():
-    """The saved PPOBrain (it scores goals, unlike a random network) with a fresh critic."""
-    weights = PPOBrain.load_weights(PPOBrain.WEIGHTS_FILE)
+    """A saved v1 PPOBrain (it scores goals, unlike a random network) with a fresh critic."""
+    weights = PPOBrain.load_weights(V1_WEIGHTS_FILE)
     if weights is None:
         pytest.skip("no saved PPOBrain weights")
     return dict(weights, value=PPO(OBS_DIM, 2, seed=1).weights()["value"])
@@ -140,7 +145,9 @@ def test_ppo_games_match_game_tick_by_tick():
 def test_mixed_brains_and_float32_networks_play_the_same_game():
     """
     A heuristic against a PPOBrain in one VecGame. With float32 networks the games
-    start out the same, drifting apart only slowly (by tick 100 by well under a pixel).
+    start out the same, drifting apart only slowly (by tick 60 by well under a pixel;
+    at SPEED_SCALE 1.5 collisions come sooner and amplify the drift, so by tick 100 a
+    game may already have gone its own way).
     """
     trained = trained_weights()
     assert_plays_like_game(
@@ -152,14 +159,14 @@ def test_mixed_brains_and_float32_networks_play_the_same_game():
         [PPOBrain("p", weights=trained) for _ in seeds],
         [BehindAndTowards() for _ in seeds],
         seeds,
-        game_length=100,
+        game_length=60,
         precision="float32",
     )
     games = [
-        Game(PPOBrain("p", weights=trained), BehindAndTowards(), 100, True, seed=s)
+        Game(PPOBrain("p", weights=trained), BehindAndTowards(), 60, True, seed=s)
         for s in seeds
     ]
-    for _ in range(100):
+    for _ in range(60):
         vec.tick()
         for k, game in enumerate(games):
             physics_ticks(game)

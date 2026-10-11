@@ -40,7 +40,9 @@ def test_mlp_backward_matches_numerical_gradient():
 def test_ppo_policy_gradient_matches_numerical_gradient():
     """One PPO step's analytic gradient equals the numerical gradient of the clipped loss."""
     rng = np.random.default_rng(1)
-    ppo = PPO(5, 2, hidden=(8,), entropy_coef=0.01, max_grad_norm=1e9, seed=1)
+    ppo = PPO(
+        5, 2, hidden=(8,), entropy_coef=0.01, max_grad_norm=1e9, seed=1, dtype=np.float64
+    )
     obs = rng.normal(size=(20, 5))
     actions = rng.normal(size=(20, 2))
     # Old log probs a little off the current ones so some ratios are clipped.
@@ -181,7 +183,133 @@ def test_update_stops_early_once_policy_moves_past_target_kl():
         return ppo.update(obs, actions, logp, adv, ret)["epochs"]
 
     assert epochs_run(None) == 8
-    assert epochs_run(1e-6) == 1
+    # The epoch's KL is the mean of its minibatches' KLs, each measured before its own
+    # step (the first is exactly 0), and random actions make the estimate noisy, so
+    # the first epoch here reads below 1.5e-6 and the update stops after the second.
+    assert epochs_run(1e-6) == 2
+
+
+def test_early_stop_uses_the_epochs_minibatch_kls_without_an_extra_pass():
+    """The KL test after each epoch is the sample-weighted mean of that epoch's
+    per-minibatch KLs; the policy is evaluated only once per minibatch step."""
+    rng = np.random.default_rng(11)
+    n, mb, target_kl = 1000, 256, 0.004  # 4 minibatches, the last one short
+    obs = rng.normal(size=(n, 5))
+    ppo = PPO(5, 2, hidden=(8,), lr=3e-3, epochs=8, minibatch=mb, target_kl=target_kl, seed=11)
+    actions = ppo.policy(obs) + np.exp(ppo.log_std) * rng.normal(size=(n, 2))
+    logp = gaussian_log_prob(actions, ppo.policy(obs), ppo.log_std)
+    adv, ret = rng.normal(size=n), rng.normal(size=n)
+
+    kls, forwards = [], []
+    policy_step, forward = ppo._policy_step, ppo.policy.forward
+    ppo._policy_step = lambda *a: kls.append(policy_step(*a)) or kls[-1]
+    ppo.policy.forward = lambda x: forwards.append(len(x)) or forward(x)
+    stats = ppo.update(obs, actions, logp, adv, ret)
+
+    sizes = [mb, mb, mb, n - 3 * mb]
+    epoch_kl = [
+        np.dot(sizes, kls[e * 4 : e * 4 + 4]) / n for e in range(len(kls) // 4)
+    ]
+    expected = next(
+        (e + 1 for e, kl in enumerate(epoch_kl) if kl > 1.5 * target_kl), ppo.epochs
+    )
+    assert 1 < stats["epochs"] < ppo.epochs  # the test is not vacuous
+    assert stats["epochs"] == expected == len(kls) // 4
+    assert forwards == sizes * int(stats["epochs"])  # no full-batch pass
+
+
+def test_float32_update_matches_float64_to_rounding():
+    """The same update in float32 and float64, from the same weights on the same batch,
+    ends at the same parameters up to float32 rounding."""
+    rng = np.random.default_rng(12)
+    n = 3000
+    obs = rng.normal(size=(n, 6))
+    learners = {
+        dt: PPO(6, 2, hidden=(32, 32), minibatch=512, target_kl=None, seed=12, dtype=dt)
+        for dt in (np.float32, np.float64)
+    }
+    # Start both from exactly the same (float32-representable) weights.
+    start = learners[np.float32].weights()
+    for ppo in learners.values():
+        ppo.policy.params[:] = [np.array(p) for p in start["policy"]]
+        ppo.value.params[:] = [np.array(p) for p in start["value"]]
+        ppo.log_std[...] = start["log_std"]
+    actions = rng.normal(0, 0.5, (n, 2))
+    logp = gaussian_log_prob(actions, learners[np.float64].policy(obs), start["log_std"])
+    logp += rng.normal(0, 0.05, n)
+    adv, ret = rng.normal(size=n), rng.normal(size=n)
+    stats = {dt: ppo.update(obs, actions, logp, adv, ret) for dt, ppo in learners.items()}
+
+    w32, w64 = learners[np.float32].weights(), learners[np.float64].weights()
+    for key in ("policy", "value"):
+        for p32, p64, p0 in zip(w32[key], w64[key], start[key]):
+            assert learners[np.float32].policy.params[0].dtype == np.float32
+            assert p32.dtype == np.float64  # weights() is float64 whatever the dtype
+            # Compare the change each update made: float32 rounding, not a real difference.
+            change = np.abs(p64 - p0).max()
+            assert np.abs(p32 - p64).max() <= 1e-3 * change + 1e-6
+    for k in ("policy_loss", "value_loss", "approx_kl"):
+        assert abs(stats[np.float32][k] - stats[np.float64][k]) <= 1e-4 * (1 + abs(stats[np.float64][k]))
+
+
+def test_float32_gradients_match_float64():
+    rng = np.random.default_rng(13)
+    obs = rng.normal(size=(200, 5))
+    actions = rng.normal(size=(200, 2))
+    adv = rng.normal(size=200)
+    grads = {}
+    for dt in (np.float64, np.float32):
+        ppo = PPO(5, 2, hidden=(16, 16), max_grad_norm=1e9, seed=13, dtype=dt)
+        if dt is np.float64:
+            start = ppo.weights()
+            old = gaussian_log_prob(actions, ppo.policy(obs), ppo.log_std) + rng.normal(0, 0.3, 200)
+        ppo.policy.params[:] = [p.astype(dt) for p in start["policy"]]
+        ppo.log_std[...] = start["log_std"]
+        captured = []
+        ppo.sync_dtype()
+        ppo.policy_opt.step = captured.append
+        cast = [np.asarray(a, dtype=dt) for a in (obs, actions, old, adv)]
+        ppo._policy_step(*cast, {k: [] for k in ("policy_loss", "clip_frac", "approx_kl")})
+        grads[dt] = captured[0]
+    for g32, g64 in zip(grads[np.float32], grads[np.float64]):
+        assert g32.dtype == np.float32
+        assert np.allclose(g32, g64, rtol=1e-4, atol=1e-5 * np.abs(g64).max())
+
+
+def test_float32_learner_resumes_from_float64_arrays():
+    """train_ppo.py's --resume swaps float64 arrays from latest.npz into the learner; the
+    next update trains them in float32, with the optimisers attached to the new arrays."""
+    rng = np.random.default_rng(14)
+    saved = PPO(5, 2, hidden=(8,), seed=99, dtype=np.float64).weights()
+    ppo = PPO(5, 2, hidden=(8,), seed=14)
+    ppo.policy.params[:] = saved["policy"]  # as train_ppo.py does
+    ppo.value.params[:] = saved["value"]
+    ppo.log_std[:] = saved["log_std"]
+    obs = rng.normal(size=(64, 5))
+    actions = rng.normal(size=(64, 2))
+    logp = gaussian_log_prob(actions, ppo.policy(obs), saved["log_std"])
+    ppo.update(obs, actions, logp, rng.normal(size=64), rng.normal(size=64))
+    params = ppo.policy.params + ppo.value.params + [ppo.log_std]
+    assert all(p.dtype == np.float32 for p in params)
+    assert all(a is b for a, b in zip(ppo.policy_opt.params, ppo.policy.params + [ppo.log_std]))
+    assert all(a is b for a, b in zip(ppo.value_opt.params, ppo.value.params))
+    assert all(m.dtype == np.float32 for m in ppo.policy_opt.m + ppo.value_opt.v)
+    moved = ppo.weights()
+    assert not np.allclose(moved["policy"][0], saved["policy"][0])  # it trained
+    # ...starting from the saved networks (a small update, not a fresh network).
+    assert np.abs(moved["policy"][0] - saved["policy"][0]).max() < 0.05
+
+
+def test_float32_weights_play_like_float64_weights():
+    """A brain made from a float32 learner's weights() is a float64 network whose
+    parameters are exactly the learner's, so it plays as a float64-trained one would."""
+    ppo = PPO(OBS_DIM, 2, seed=15)
+    weights = ppo.weights()
+    brain = PPOBrain("b", weights=weights)
+    assert all(p.dtype == np.float64 for p in brain.policy.params)
+    assert all(
+        np.array_equal(p, q.astype(np.float64)) for p, q in zip(brain.policy.params, ppo.policy.params)
+    )
 
 
 def test_exploration_noise_never_drops_below_floor():
@@ -219,7 +347,7 @@ def test_new_potential_terms():
     assert potential_terms(spread, opp, np.array([900.0, 400.0]))["final_third"] == 0
     # Heading into the goal mouth is a shot; heading wide or away is not.
     assert potential_terms(spread, opp, deep, np.array([8.0, 0.0]))["shot"] > 0
-    assert potential_terms(spread, opp, deep, np.array([8.0, 8.0]))["shot"] == 0
+    assert potential_terms(spread, opp, deep, np.array([8.0, 12.0]))["shot"] == 0
     assert potential_terms(spread, opp, deep, np.array([-8.0, 0.0]))["shot"] == 0
 
 

@@ -38,6 +38,15 @@ def video_reports():
     return videos
 
 
+def benchmark():
+    """Fitness against DefendersAndAttackers per round (benchmark.py), if measured."""
+    path = lf.LEAGUE_DIR / "benchmark.json"
+    try:
+        return json.loads(path.read_text()) if path.exists() else None
+    except ValueError:
+        return None
+
+
 def status():
     round_ = lf.latest_round() or {"number": 0, "time": "-", "swiss": [], "h2h": [], "notes": []}
     return {
@@ -51,7 +60,10 @@ def status():
         "next_round_in": lf.next_round_eta(20),
         "table": lf.football_table(results) if (results := lf.round_results()) else None,
         "table_round": results["round"] if results else None,
+        "title_race": results.get("title_race") if results else None,
+        "qualifying": results.get("qualifying") if results else None,
         "cpu": lf.compute_usd(),
+        "benchmark": benchmark(),
         "videos": video_reports(),
     }
 
@@ -101,9 +113,12 @@ video { width:100%; max-width:900px; border-radius:8px; background:#000 }
     <div class="scroll" id="footballwrap"><table id="football"></table></div>
     <h2 style="margin-top:16px">Statistics: every game of the round's Swiss (95% confidence intervals)</h2>
     <div class="scroll" id="swisswrap"><table id="swiss"></table></div></section>
+  <section class="card wide"><h2>Fitness on a fixed yardstick: goals per 9,000 ticks against DefendersAndAttackers (DAA = 0)</h2>
+    <div class="sub" style="margin:-4px 0 8px">Each round's Swiss winner (dots, with 95% confidence intervals) and the reigning champion (line), each playing the same 120 games against DAA, a strong hand-written brain that no league brain trains against. Positive = better than DAA.</div>
+    <div id="fitness"><span class="sub">Measuring…</span></div></section>
   <section class="card wide"><h2>Showcase videos: the top two of each round, with a match report</h2><div id="videos"></div></section>
-  <section class="card"><h2>Head to head with the champion (+ = entrant stronger)</h2><div class="scroll"><table id="h2h"></table></div></section>
-  <section class="card"><h2>Style against the champion</h2><div class="scroll"><table id="style"></table></div></section>
+  <section class="card"><h2 id="h2htitle">Title race: tournament rating over the last 3 rounds</h2><div class="scroll"><table id="h2h"></table></div></section>
+  <section class="card"><h2 id="styletitle">Waiting brains: qualifying against the title holder</h2><div class="scroll"><table id="style"></table></div></section>
   <section class="card"><h2>Learners and helpers</h2><div class="scroll"><table id="learners"></table></div><div id="helpers" class="sub" style="margin-top:8px"></div></section>
   <section class="card"><h2>Events</h2><ul class="events" id="events"></ul></section>
 </main>
@@ -112,7 +127,37 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 function fmtEta(s) { if (s == null) return '—'; if (s < 0) return 'playing now'; const m = Math.floor(s/60); return m + ' min ' + Math.floor(s%60) + ' s'; }
 function cpuh(d, name) { const h = (d.cpu || {})[name]; return h == null ? '<span class="sub">–</span>' : '$' + h.toFixed(2); }
+function renderFitness(b) {
+  if (!b || !b.rounds || !Object.keys(b.rounds).length) { $('fitness').innerHTML = '<span class="sub">Measuring… (about 6 CPU-minutes per brain)</span>'; return; }
+  const rounds = Object.keys(b.rounds).map(Number).sort((a, c) => a - c);
+  const pts = rounds.map(r => ({r, ...b.rounds[r]}));
+  const vals = [0];
+  pts.forEach(p => ['winner_fitness', 'champion_fitness'].forEach(k => { if (p[k]) vals.push(p[k].gd - p[k].gd_ci, p[k].gd + p[k].gd_ci); }));
+  Object.values(b.references || {}).forEach(v => vals.push(v.gd));
+  const lo = Math.floor(Math.min(...vals)) - 0.5, hi = Math.ceil(Math.max(...vals)) + 0.5;
+  const W = 900, H = 300, L = 46, R = 16, T = 12, B = 30;
+  const x = r => L + (rounds.length < 2 ? (W - L - R) / 2 : (r - rounds[0]) / (rounds[rounds.length - 1] - rounds[0]) * (W - L - R));
+  const y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" font-size="11" fill="var(--muted)">`;
+  for (let v = Math.ceil(lo); v <= hi; v++) svg += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v > 0 ? '+' : ''}${v}</text>`;
+  svg += `<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="var(--muted)" stroke-dasharray="4 3"/><text x="${W - R}" y="${y(0) - 4}" text-anchor="end">DAA</text>`;
+  Object.entries(b.references || {}).forEach(([label, v]) => { svg += `<line x1="${L}" x2="${W - R}" y1="${y(v.gd)}" y2="${y(v.gd)}" stroke="var(--accent)" stroke-dasharray="6 4"/><text x="${W - R}" y="${y(v.gd) - 4}" text-anchor="end" fill="var(--accent)">${esc(label)} ${v.gd >= 0 ? '+' : ''}${v.gd.toFixed(1)}</text>`; });
+  const champ = pts.filter(p => p.champion_fitness);
+  if (champ.length) svg += `<polyline fill="none" stroke="var(--red)" stroke-width="2" points="${champ.map(p => `${x(p.r)},${y(p.champion_fitness.gd)}`).join(' ')}"/>`;
+  pts.forEach(p => {
+    svg += `<text x="${x(p.r)}" y="${H - 10}" text-anchor="middle">${p.r}</text>`;
+    const f = p.winner_fitness; if (!f) return;
+    svg += `<line x1="${x(p.r)}" x2="${x(p.r)}" y1="${y(f.gd - f.gd_ci)}" y2="${y(f.gd + f.gd_ci)}" stroke="var(--blue)"/>`;
+    svg += `<circle cx="${x(p.r)}" cy="${y(f.gd)}" r="5" fill="var(--blue)"><title>Round ${p.r} winner ${esc(p.winner)}: ${f.gd.toFixed(2)} ±${f.gd_ci.toFixed(2)}</title></circle>`;
+  });
+  svg += `<text x="${L}" y="${H - 10}" text-anchor="end">round</text></svg>`;
+  const legend = `<div class="sub"><span style="color:var(--blue)">●</span> round winner &nbsp; <span style="color:var(--red)">━</span> champion &nbsp; <span style="color:var(--accent)">╌</span> reference</div>`;
+  const rows = pts.map(p => `<tr><td>${p.r}</td><td>${esc(p.winner)}</td><td>${p.winner_fitness ? fmtFit(p.winner_fitness) : '…'}</td><td>${esc(p.champion)}</td><td>${p.champion_fitness ? fmtFit(p.champion_fitness) : '…'}</td></tr>`).join('');
+  $('fitness').innerHTML = svg + legend + `<div class="scroll"><table style="margin-top:8px"><tr><th>Round</th><th>Swiss winner</th><th>vs DAA</th><th>Champion</th><th>vs DAA</th></tr>${rows}</table></div>`;
+}
+function fmtFit(f) { return `<span class="${f.gd >= 0 ? 'pos' : 'neg'}">${f.gd >= 0 ? '+' : ''}${f.gd.toFixed(2)}</span> ±${f.gd_ci.toFixed(2)}`; }
 function render(d) {
+  try { renderFitness(d.benchmark); } catch (e) { $('fitness').textContent = 'Chart error: ' + e; }
   if (d.table) {
     $('tabletitle').textContent = `League table: round ${d.table_round}`;
     $('football').innerHTML = '<tr><th>Pos</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th title="compute used for training so far, at $0.04 per CPU-hour">Compute</th></tr>' +
@@ -143,6 +188,16 @@ function render(d) {
       <td class="${x.gd >= 0 ? 'pos' : 'neg'}">${x.gd >= 0 ? '+' : ''}${x.gd.toFixed(2)} ±${x.gd_ci.toFixed(2)}</td>
       <td>${x.pts.toFixed(2)} ±${x.pts_ci.toFixed(2)}</td><td>${cpuh(d, x.name)}</td>
       <td><div class="bar"><i style="left:0;width:${100 * x.pts / maxPts}%"></i></div></td></tr>`).join('');
+  if (d.title_race && Object.keys(d.title_race).length) {
+    const tr = Object.entries(d.title_race).sort((a, b) => b[1].gd - a[1].gd);
+    $('h2h').innerHTML = '<tr><th>#</th><th>Brain</th><th>Rating</th><th>Matches</th></tr>' +
+      tr.map(([n, x], k) => `<tr class="${n === d.champion ? 'champ' : ''}"><td>${k + 1}</td><td>${esc(n)}${n === d.champion ? ' (holder)' : ''}</td>
+        <td class="${x.gd >= 0 ? 'pos' : 'neg'}">${x.gd >= 0 ? '+' : ''}${x.gd.toFixed(2)} ±${x.gd_ci.toFixed(2)}</td><td>${x.matches}</td></tr>`).join('');
+    const q = Object.entries(d.qualifying || {});
+    $('style').innerHTML = q.length ? '<tr><th></th><th>Brain</th><th>Games</th><th>GD/game vs holder</th></tr>' +
+      q.map(([n, x]) => `<tr><td></td><td>${esc(n)}</td><td>${x.n}</td><td class="${x.gd >= 0 ? 'pos' : 'neg'}">${x.gd >= 0 ? '+' : ''}${x.gd.toFixed(2)} ±${x.gd_ci.toFixed(2)}</td></tr>`).join('')
+      : '<tr><td class="sub">No brains waiting.</td></tr>';
+  } else {
   const h = [...r.h2h].sort((a, b) => b.gd - a.gd);
   const noChamp = '<tr><td class="sub">No reigning champion during this round (the first champion is crowned at the end of round 1).</td></tr>';
   $('h2h').innerHTML = '<tr><th></th><th>Entrant</th><th>Games</th><th>W-D-L</th><th>GD/game</th><th>vs champion</th></tr>' +
@@ -155,6 +210,7 @@ function render(d) {
   else $('style').innerHTML = '<tr><th></th><th>Entrant</th><th>Their half</th><th>Final third</th><th>Shots</th><th>Spread</th><th>Passes</th></tr>' +
     h.map(x => `<tr><td></td><td>${esc(x.name)}</td><td>${(100 * x.style.own_half).toFixed(0)}%</td><td>${(100 * x.style.final_third).toFixed(0)}%</td>
       <td>${x.style.shots.toFixed(1)}</td><td>${x.style.spread.toFixed(0)}</td><td>${x.style.passes.toFixed(1)}</td></tr>`).join('');
+  }
   $('learners').innerHTML = '<tr><th></th><th>Learner</th><th>Iterations</th></tr>' +
     Object.entries(d.learners).map(([k, v]) => `<tr><td></td><td>${esc(k)}</td><td>${v}</td></tr>`).join('');
   $('helpers').innerHTML = Object.entries(d.helpers).map(([k, v]) => `<div><b>${esc(k)}</b>: ${esc(v)}</div>`).join('');

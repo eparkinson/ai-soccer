@@ -19,7 +19,7 @@ H2H_ROW = re.compile(
     r"^    (\S+)\s+(\d+)\s+(\d+)-(\d+)-(\d+)\s+([+-]\d+\.\d+) ±(\d+\.\d+)\s+([\d.\s]+)$"
 )
 STYLE_KEYS = ["control", "own_half", "final_third", "shots", "spread", "passes"]
-EVENT = re.compile(r"(NEW CHAMPION|PROMOTED|ON COURSE|PENDING|REPLACED|RETIRED|ROSTER|VERDICT|SUCCESS|Not yet significantly|exited)")
+EVENT = re.compile(r"(NEW CHAMPION|PROMOTED|TITLE RACE|ON COURSE|PENDING|REPLACED|RETIRED|ROSTER|VERDICT|SUCCESS|Not yet significantly|exited)")
 
 
 def latest_round(log_text=None):

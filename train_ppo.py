@@ -35,6 +35,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "8")
 
 import argparse  # noqa: E402
 import json  # noqa: E402
+import re  # noqa: E402
 import time  # noqa: E402
 from multiprocessing import Pool  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -42,17 +43,20 @@ from pathlib import Path  # noqa: E402
 import numpy as np  # noqa: E402
 
 from aisoccer.abstractbrain import AbstractBrain  # noqa: E402
+from aisoccer.balance import Record, tilt  # noqa: E402
 from aisoccer.brains.AdaptiveChaser import AdaptiveChaser  # noqa: E402
 from aisoccer.brains.BehindAndTowards import BehindAndTowards  # noqa: E402
 from aisoccer.brains.DefendersAndAttackers import DefendersAndAttackers  # noqa: E402
 from aisoccer.brains.PPOBrain import ACT_DIM, OBS_DIM, PPOBrain, player_features  # noqa
+from aisoccer.brains.PPOBrain import OBS_DIMS, ObsMemory, observation, obs_version_of, widen_inputs  # noqa
 from aisoccer.brains.RandomWalk import RandomWalk  # noqa: E402
 from aisoccer.brains.SimpleBrain import SimpleBrain  # noqa: E402
 from aisoccer.brains.StrategicPlanner import StrategicPlanner  # noqa: E402
+from aisoccer.brainspec import HEURISTICS as BRAINSPEC_HEURISTICS  # noqa: E402
 from aisoccer.brainspec import load_brain  # noqa: E402
 from aisoccer.constants import Constants  # noqa: E402
 from aisoccer.game import Game  # noqa: E402
-from aisoccer.ppo import PPO, Adam, gae  # noqa: E402
+from aisoccer.ppo import MLP, PPO, Adam, gae  # noqa: E402
 from aisoccer.vecgame import VecGame  # noqa: E402
 
 HEURISTICS = {
@@ -92,6 +96,30 @@ def make_opponent(name):
     if name.startswith("file:"):
         return load_brain(name.removeprefix("file:"))
     return PPOBrain(name, weights=PPOBrain.load_weights(HISTORY_DIR / f"{name}.npz"))
+
+
+def is_brain_spec(name):
+    """
+    Whether a teacher name is an aisoccer.brainspec spec that make_opponent does not
+    already handle: "brain:<module>.<Class>", "explore:<path>", a .npz or .json path,
+    or a heuristic known only to brainspec (e.g. "LearningBrain").
+    """
+    return (
+        name.startswith(("brain:", "explore:"))
+        or Path(name).suffix in (".npz", ".json")
+        or name in BRAINSPEC_HEURISTICS
+    )
+
+
+def make_teacher(name):
+    """
+    The brain to imitate (--bc-teacher): a heuristic brain name, "file:<path>" or a saved
+    PPOBrain version, exactly as make_opponent makes them, or any other brain spec
+    aisoccer.brainspec.load_brain understands, e.g. "brain:aisoccer.llm.v11.LLMBrainV11".
+    """
+    if name in HEURISTICS or name.startswith("file:") or not is_brain_spec(name):
+        return make_opponent(name)
+    return load_brain(name)
 
 
 def save_atomic(path, save):
@@ -219,19 +247,25 @@ def play_iteration_games(workers, tasks, vector_games, precision="exact"):
 
 
 def capped(action):
-    """The game caps accelerations at magnitude 1, so that is what to imitate."""
+    """The game caps accelerations at magnitude MAX_ACCELERATION, so that is what to imitate."""
     action = np.asarray(action, dtype=float)
+    cap = Constants.MAX_ACCELERATION
     norms = np.linalg.norm(action, axis=1, keepdims=True)
-    return np.where(norms > 1, action / np.maximum(norms, 1), action)
+    return np.where(norms > cap, action / np.maximum(norms, cap) * cap, action)
 
 
 class Demonstrator(AbstractBrain):
-    """Plays as the teacher brain and records what it sees and does, for cloning."""
+    """
+    Plays as the teacher brain and records what it sees (as observation version
+    ``obs_version``) and does, for cloning.
+    """
 
-    def __init__(self, teacher):
+    def __init__(self, teacher, obs_version=1):
         super().__init__(name="demonstrator")
-        self.teacher = make_opponent(teacher)
+        self.teacher = make_teacher(teacher)
         self.ticks = 0
+        self.obs_version = obs_version
+        self.memory = ObsMemory() if obs_version == 2 else None
         self.obs: list[np.ndarray] = []
         self.act: list[np.ndarray] = []
 
@@ -249,22 +283,29 @@ class Demonstrator(AbstractBrain):
         )
         action = np.asarray(self.teacher.move(*view), dtype=float)
         self.ticks += 1
+        if self.memory is not None:
+            self.memory.start_tick(self.game_time)
         # Record at the rate PPOBrain makes decisions.
         if self.ticks % PPOBrain.ACTION_REPEAT == 0:
-            self.obs.append(player_features(*view))
+            self.obs.append(observation(view, self.obs_version, self.memory))
             self.act.append(capped(action))
+        if self.memory is not None:
+            self.memory.end_tick()
         return action
 
 
 def play_demo_game(task):
-    """The teacher vs a random heuristic; returns its (obs, actions) per player."""
-    seed, teacher = task
+    """
+    The teacher vs a random heuristic; returns its (obs, actions) per player. ``task``
+    is (seed, teacher) or (seed, teacher, obs_version).
+    """
+    seed, teacher, obs_version = (*task, 1)[:3]
     rng = np.random.default_rng(seed)
-    demonstrator = Demonstrator(teacher)
+    demonstrator = Demonstrator(teacher, obs_version)
     other = HEURISTICS[str(rng.choice(list(HEURISTICS)))]()
     blue, red = (demonstrator, other) if rng.random() < 0.5 else (other, demonstrator)
     Game(blue, red, quiet_mode=True, seed=seed).play()
-    obs = np.array(demonstrator.obs, dtype=np.float32).reshape(-1, OBS_DIM)
+    obs = np.array(demonstrator.obs, dtype=np.float32).reshape(-1, OBS_DIMS[obs_version])
     act = np.array(demonstrator.act, dtype=np.float32).reshape(-1, ACT_DIM)
     return obs, act
 
@@ -278,12 +319,12 @@ class DaggerStudent(PPOBrain):
 
     def __init__(self, weights, teacher):
         super().__init__("student", weights=weights)
-        self.teacher = make_opponent(teacher)
+        self.teacher = make_teacher(teacher)
         self.obs: list[np.ndarray] = []
         self.act: list[np.ndarray] = []
 
     def decide(self):
-        super().decide()
+        super().decide()  # sets last_obs: what the student saw, at its obs version
         view = (
             self.my_players_pos,
             self.my_players_vel,
@@ -295,7 +336,7 @@ class DaggerStudent(PPOBrain):
             self.opp_score,
             self.game_time,
         )
-        self.obs.append(player_features(*view))
+        self.obs.append(self.last_obs)
         self.act.append(capped(self.teacher.move(*view)))
 
 
@@ -307,7 +348,7 @@ def play_dagger_game(task):
     other = HEURISTICS[str(rng.choice(list(HEURISTICS)))]()
     blue, red = (student, other) if rng.random() < 0.5 else (other, student)
     Game(blue, red, quiet_mode=True, seed=seed).play()
-    obs = np.array(student.obs, dtype=np.float32).reshape(-1, OBS_DIM)
+    obs = np.array(student.obs, dtype=np.float32).reshape(-1, student.obs_dim)
     act = np.array(student.act, dtype=np.float32).reshape(-1, ACT_DIM)
     return obs, act
 
@@ -431,8 +472,191 @@ def evaluate(pool, weights, games_per_opponent, seed=0):
     return float(ppo_points[worst])
 
 
+def current_champion(pool):
+    """
+    The current champion among the pool files: the league copies every champion into
+    each learner's pool as champ-N.json or PPO-champ-N.npz, and the highest N is the
+    newest (as league.py numbers them). None if the pool holds no champion.
+    """
+    numbered = [
+        (int(m.group(1)), path)
+        for path in pool
+        if (m := re.fullmatch(r"(?:PPO-)?champ-(\d+)", Path(path).stem))
+    ]
+    return max(numbered)[1] if numbered else None
+
+
+class Ladder:
+    """
+    Stepping-stone opponent choice for pool games (config "ladder"), in the spirit of
+    prioritised fictitious self-play: the learner's recent score against each pool
+    opponent (win 1, draw 1/2, loss 0) sets how often it plays them. An opponent it beats
+    about half the time teaches the most and weighs 1 (weight 4 x (1 - x) for expected
+    score x); one it always beats or always loses to weighs down to `floor`, so it is
+    still played now and then and its estimate stays current.
+
+    The expected score is over roughly the last `memory` games against that opponent
+    (older games fade out), starting from one win and one loss (x = 1/2 for an opponent
+    not played yet). Kept in `path` so a restarted learner carries on where it was.
+    """
+
+    OPTIONS = {"memory": 40, "floor": 0.1}
+
+    def __init__(self, path=None, memory=40, floor=0.1):
+        self.path = Path(path) if path else None
+        self.memory = memory
+        self.floor = floor
+        self.record = {}  # opponent file name -> [score sum, games], both faded
+        if self.path and self.path.exists():
+            self.record = json.loads(self.path.read_text())
+
+    @classmethod
+    def from_config(cls, option, path=None):
+        """The ladder for config "ladder": true, {} or {"memory": ..., "floor": ...}; None if off."""
+        if option is None or option is False:
+            return None
+        options = option if isinstance(option, dict) else {}
+        unknown = set(options) - set(cls.OPTIONS)
+        if unknown:
+            raise ValueError(f"unknown ladder options: {sorted(unknown)}")
+        return cls(path, **{**cls.OPTIONS, **options})
+
+    def expected(self, name):
+        total, games = self.record.get(name, (0.0, 0.0))
+        return (total + 1.0) / (games + 2.0)
+
+    def weights(self, names):
+        x = np.array([self.expected(n) for n in names])
+        return np.maximum(4.0 * x * (1.0 - x), self.floor)
+
+    def choose(self, pool, rng):
+        """A pool file, drawn with the ladder's weights."""
+        w = self.weights([Path(p).name for p in pool])
+        return pool[rng.choice(len(pool), p=w / w.sum())]
+
+    def add(self, name, mine, theirs):
+        """Record a game's result against the opponent in pool file `name`."""
+        score = 1.0 if mine > theirs else 0.5 if mine == theirs else 0.0
+        fade = 1.0 - 1.0 / self.memory
+        total, games = self.record.get(name, (0.0, 0.0))
+        self.record[name] = [total * fade + score, games * fade + 1.0]
+
+    def save(self):
+        if self.path:
+            tmp = self.path.with_name(self.path.stem + ".tmp.json")
+            tmp.write_text(json.dumps(self.record))
+            os.replace(tmp, self.path)
+
+    def summary(self, pool):
+        """Each pool opponent's expected score and share of pool games, most played first."""
+        names = [Path(p).name for p in pool]
+        w = self.weights(names)
+        rows = sorted(zip(names, w / w.sum()), key=lambda r: -r[1])
+        return ", ".join(f"{Path(n).stem} {self.expected(n):.2f} {s:.0%}" for n, s in rows)
+
+
+class Balance:
+    """
+    Balanced pool opponents (config "balance"): pool games are drawn so that, on average,
+    the learner is about as good as the opponents it meets, a small edge `target` goals
+    per 1000 ticks ahead, while still meeting weaker and stronger ones (aisoccer/balance.py:
+    equal weights tilted by the learner's recent goal difference against each opponent,
+    a share `floor` kept equal). Same interface as Ladder; kept in `path`.
+    """
+
+    OPTIONS = {"target": 0.1, "floor": 0.2, "memory": 40}
+
+    def __init__(self, path=None, target=0.1, floor=0.2, memory=40):
+        self.path = Path(path) if path else None
+        self.target, self.floor = target, floor
+        data = json.loads(self.path.read_text()) if self.path and self.path.exists() else {}
+        self.record = Record(data, memory=memory, prior=target)
+
+    @classmethod
+    def from_config(cls, option, path=None):
+        """The balance for config "balance": true, {} or {"target", "floor", "memory"}; None if off."""
+        if option is None or option is False:
+            return None
+        options = option if isinstance(option, dict) else {}
+        unknown = set(options) - set(cls.OPTIONS)
+        if unknown:
+            raise ValueError(f"unknown balance options: {sorted(unknown)}")
+        return cls(path, **{**cls.OPTIONS, **options})
+
+    def weights(self, names):
+        return tilt(np.ones(len(names)), self.record.values(names), self.target, self.floor)
+
+    def choose(self, pool, rng):
+        w = self.weights([Path(p).name for p in pool])
+        return pool[rng.choice(len(pool), p=w)]
+
+    def add(self, name, mine, theirs):
+        self.record.add(name, (mine - theirs) * 1000.0 / GAME_LENGTH)
+
+    def save(self):
+        if self.path:
+            tmp = self.path.with_name(self.path.stem + ".tmp.json")
+            tmp.write_text(json.dumps(self.record.data))
+            os.replace(tmp, self.path)
+
+    def summary(self, pool):
+        """Each pool opponent's recent goal difference per 1000 ticks and share of pool games, most played first."""
+        names = [Path(p).name for p in pool]
+        w = self.weights(names)
+        rows = sorted(zip(names, self.record.values(names), w), key=lambda r: -r[2])
+        return f"weighted {float(w @ self.record.values(names)):+.2f}; " + ", ".join(
+            f"{Path(n).stem} {v:+.2f} {s:.0%}" for n, v, s in rows
+        )
+
+
+def pool_chooser(args, run_dir):
+    """The pool opponent chooser: Balance (config "balance"), else Ladder (config "ladder"), else None (uniform)."""
+    return Balance.from_config(args.balance, run_dir / "balance.json") or Ladder.from_config(
+        args.ladder, run_dir / "ladder.json"
+    )
+
+
+def choose_opponent(roll, rng, args, pool, snapshots, fixed, fixed_p, ladder=None, champion=None):
+    """
+    A training game's opponent (and its weights, for a snapshot), from `roll`, uniform
+    in [0, 1): the current champion (champion_share of games, if the pool holds one),
+    self-play, an earlier snapshot of this run, a pool file (drawn by the ladder, if on,
+    else uniformly), or a fixed opponent (by `fixed_p`). With champion_share 0 and no
+    ladder this draws exactly as train_ppo.py always has.
+    """
+
+    def from_pool():
+        path = ladder.choose(pool, rng) if ladder else pool[rng.integers(len(pool))]
+        return "file:" + str(path)
+
+    share = args.champion_share if champion else 0.0
+    if roll < share:
+        return "file:" + str(champion), None
+    if roll < share + args.self_play:
+        return "self", None
+    if roll < share + args.self_play + args.snapshots:
+        return "snapshot", snapshots[rng.integers(len(snapshots))]
+    if pool and roll < share + args.self_play + args.snapshots + args.pool_share:
+        return from_pool(), None
+    if not fixed:
+        # No fixed opponents (a league that starts from zero): the league pool if there
+        # is one yet, otherwise self-play.
+        return (from_pool() if pool else "self"), None
+    return str(rng.choice(fixed, p=fixed_p)), None
+
+
+def opponent_label(opponent):
+    """A short name for an opponent in the log: a pool file's name without its folder."""
+    return Path(opponent.removeprefix("file:")).stem if opponent.startswith("file:") else opponent
+
+
 CONFIG_KEYS = {
     "action_repeat",
+    "obs_version",
+    "champion_share",
+    "ladder",
+    "balance",
+    "noise_hold",
     "game_length",
     "lr",
     "gamma",
@@ -444,19 +668,22 @@ CONFIG_KEYS = {
     "pool_share",
     "reward",
     "opponent_weights",
+    "xg_model",
 }
 
 
 GAME_LENGTH = Constants.GAME_LENGTH  # ticks per training game (--game-length)
 
 
-def set_action_repeat(ticks, game_length=None):
+def set_action_repeat(ticks, game_length=None, noise_hold=1):
     """
     The learner's (and its self-play twin's) decisions last `ticks` ticks; training
-    games last `game_length` ticks. Run in the main process and in every worker.
+    games last `game_length` ticks; exploration noise is held for `noise_hold` decisions.
+    Run in the main process and in every worker.
     """
     global GAME_LENGTH
     PPOBrain.ACTION_REPEAT = ticks
+    PPOBrain.NOISE_HOLD = noise_hold
     GAME_LENGTH = game_length or Constants.GAME_LENGTH
 
 
@@ -483,6 +710,24 @@ def load_networks(ppo, weights):
     return True
 
 
+def follow_obs_version(ppo, args, source):
+    """
+    After loading networks from ``source`` (--resume, --resume-weights, --init-weights):
+    brains build the observation their networks read, so if that is not the version
+    asked for (e.g. a learner restarted after adopting another version's networks), go
+    with the networks, with fresh optimisers for their shapes.
+    """
+    version = obs_version_of(ppo.weights())
+    if version != args.obs_version:
+        log(f"  {source} reads observation version {version}: using it, not {args.obs_version}")
+        args.obs_version = version
+        if ppo.value.params[0].shape[0] != OBS_DIMS[version]:  # a fresh critic, too narrow
+            sizes = [OBS_DIMS[version]] + [w.shape[1] for w in ppo.value.params[0::2]]
+            ppo.value = MLP(sizes, ppo.rng, out_scale=1.0)
+        ppo.policy_opt = Adam(ppo.policy.params + [ppo.log_std], lr=args.lr)
+        ppo.value_opt = Adam(ppo.value.params, lr=args.lr)
+
+
 def adopt(ppo, args, iteration):
     """
     Population-based training hook: if league.py has left adopt.npz (and optionally
@@ -497,12 +742,15 @@ def adopt(ppo, args, iteration):
     if config_file.exists():
         apply_config(args, json.loads(config_file.read_text()))
         config_file.unlink()
+    # The adopted networks decide the observation: brains build what their networks read.
+    args.obs_version = obs_version_of(ppo.weights())
     weights_file.unlink()
     ppo.min_log_std = float(np.log(args.min_std))
     ppo.target_kl = args.target_kl
     np.maximum(ppo.log_std, ppo.min_log_std, out=ppo.log_std)
     ppo.policy_opt = Adam(ppo.policy.params + [ppo.log_std], lr=args.lr)
     ppo.value_opt = Adam(ppo.value.params, lr=args.lr)
+    ppo.sync_dtype()  # to the update's precision before the next games are played
     log(f"ADOPTED new networks and settings at iteration {iteration}: {settings(args)}")
     return True
 
@@ -550,10 +798,20 @@ def main():
     parser.add_argument(
         "--bc-teacher",
         default="DefendersAndAttackers",
-        help="brain to imitate: a heuristic brain name or file:<weights path>",
+        help="brain to imitate: a heuristic brain name, file:<weights path>, or any brain "
+        "spec (aisoccer.brainspec), e.g. brain:aisoccer.llm.v11.LLMBrainV11",
     )
     parser.add_argument(
         "--hidden", type=int, nargs="+", default=[128, 128], help="hidden layer sizes"
+    )
+    parser.add_argument(
+        "--obs-version",
+        type=int,
+        choices=sorted(OBS_DIMS),
+        default=1,
+        help="observation features the networks read: 1 = the original 54, 2 = those plus "
+        "goal, ball-path, time-left and pressure features (PPOBrain.OBS_V2_NAMES); saved "
+        "with the weights. Config key obs_version",
     )
     parser.add_argument("--dagger-rounds", type=int, default=2)
     parser.add_argument("--dagger-games", type=int, default=100)
@@ -592,7 +850,9 @@ def main():
         "--config",
         type=Path,
         help="JSON overriding settings: lr, min_std, target_kl, self_play, snapshots, "
-        "pool_share, reward (weights), opponent_weights",
+        "pool_share, reward (weights), opponent_weights; champion_share (games against the "
+        "pool's current champion) and ladder (true or {memory, floor}: pool opponents "
+        "drawn by recent results, see Ladder)",
     )
     parser.add_argument(
         "--pool-dir",
@@ -618,9 +878,21 @@ def main():
         "path; 'float32' runs the networks in single precision, faster still, its games "
         "the same up to float32 rounding (they drift apart after a few hundred ticks)",
     )
+    parser.add_argument(
+        "--update-precision",
+        choices=["float32", "float64"],
+        default="float32",
+        help="precision of the PPO update: float32 is about 2-3x faster; weights are "
+        "saved (and resumed from) as float64 either way",
+    )
     args = parser.parse_args()
     args.reward = None
     args.opponent_weights = dict(OPPONENT_WEIGHTS)
+    args.champion_share = 0.0
+    args.ladder = None
+    args.balance = None
+    args.noise_hold = 1
+    args.xg_model = None
     if args.config:
         apply_config(args, json.loads(args.config.read_text()))
 
@@ -628,9 +900,18 @@ def main():
     RUN_DIR = args.run_dir
     LOG_FILE = RUN_DIR / "progress.log"
     RUN_DIR.mkdir(parents=True, exist_ok=True)
+    if args.xg_model:  # the "chance" reward term's xG model (fit_xg.py), fixed for this run
+        from aisoccer.brains.PPOBrain import load_xg_model
+
+        model = load_xg_model(args.xg_model)
+        log(f"xG model for the chance term: {args.xg_model}" + ("" if model else " (missing: hand-made chance)"))
+        if model is not None:
+            args.reward = {**(args.reward or {}), "xg_model": model}
     rng = np.random.default_rng(args.seed)
+    if args.obs_version not in OBS_DIMS:
+        raise SystemExit(f"obs_version must be one of {sorted(OBS_DIMS)}")
     ppo = PPO(
-        OBS_DIM,
+        OBS_DIMS[args.obs_version],
         ACT_DIM,
         hidden=tuple(args.hidden),
         lr=args.lr,
@@ -638,6 +919,7 @@ def main():
         min_log_std=float(np.log(args.min_std)),
         target_kl=args.target_kl,
         seed=args.seed,
+        dtype=np.dtype(args.update_precision),
     )
     start_iteration = 0
     if args.resume:
@@ -647,36 +929,45 @@ def main():
         ppo.log_std[:] = state["log_std"]
         start_iteration = int(state["iteration"])
         log(f"Resumed from iteration {start_iteration}")
+        follow_obs_version(ppo, args, RUN_DIR / "latest.npz")
         if args.resume_weights:
             weights = PPOBrain.load_weights(args.resume_weights)
             ppo.policy.params[:] = weights["policy"]
             ppo.value.params[:] = weights["value"]
             ppo.log_std[:] = weights["log_std"]
             log(f"  with the networks from {args.resume_weights}")
+            follow_obs_version(ppo, args, args.resume_weights)
     if args.init_weights:
         log(f"Starting from the networks in {args.init_weights}")
-        if not load_networks(ppo, PPOBrain.load_weights(args.init_weights)):
+        init = PPOBrain.load_weights(args.init_weights)
+        if obs_version_of(init) < args.obs_version:
+            # e.g. a v1 champion starting an obs-v2 learner: the new inputs start at zero
+            # weight, so it plays as before until training finds a use for them.
+            init = widen_inputs(init, args.obs_version)
+            log(f"  (widened to observation version {args.obs_version}: new inputs start at zero weight)")
+        if not load_networks(ppo, init):
             args.value_warmup = max(args.value_warmup, 10)
             log(
                 f"  (no value network there: training a fresh critic for {args.value_warmup} iterations first)"
             )
+        follow_obs_version(ppo, args, args.init_weights)
     np.maximum(ppo.log_std, ppo.min_log_std, out=ppo.log_std)
 
-    # Re-point the optimisers at the (possibly replaced) parameter arrays.
-    ppo.policy_opt.params = ppo.policy.params + [ppo.log_std]
-    ppo.value_opt.params = ppo.value.params
+    # Bring the (possibly replaced, float64) parameter arrays to the update's precision
+    # and re-point the optimisers at them.
+    ppo.sync_dtype()
 
     best_score = -1.0
 
-    set_action_repeat(args.action_repeat, args.game_length)
+    set_action_repeat(args.action_repeat, args.game_length, args.noise_hold)
     log(
         f"Training PPOBrain: {args.games} games/iteration on {args.workers} workers, "
-        f"obs {OBS_DIM}, action repeat {PPOBrain.ACTION_REPEAT}"
+        f"obs {OBS_DIMS[args.obs_version]}, action repeat {PPOBrain.ACTION_REPEAT}"
     )
     log(f"Settings: {settings(args)}")
 
     # Workers are fresh processes: they get the learner's action repeat too.
-    with Pool(args.workers, initializer=set_action_repeat, initargs=(args.action_repeat, args.game_length)) as workers:
+    with Pool(args.workers, initializer=set_action_repeat, initargs=(args.action_repeat, args.game_length, args.noise_hold)) as workers:
         best_weights = PPOBrain.load_weights(PPOBrain.WEIGHTS_FILE)
         if args.resume and best_weights is not None:
             log("\nBASELINE: the saved best weights")
@@ -688,7 +979,10 @@ def main():
             log(f"\nBEHAVIOUR CLONING {args.bc_teacher} from {args.bc_games} games")
             demos = workers.map(
                 play_demo_game,
-                [(s, args.bc_teacher) for s in range(10**6, 10**6 + args.bc_games)],
+                [
+                    (s, args.bc_teacher, args.obs_version)
+                    for s in range(10**6, 10**6 + args.bc_games)
+                ],
             )
             obs = np.concatenate([d[0] for d in demos]).astype(float)
             act = np.concatenate([d[1] for d in demos]).astype(float)
@@ -719,6 +1013,7 @@ def main():
             log()
 
         league = [ppo.weights()]
+        ladder = pool_chooser(args, RUN_DIR)
 
         for iteration in range(
             start_iteration + 1, start_iteration + args.iterations + 1
@@ -726,6 +1021,7 @@ def main():
             started = time.time()
             if adopt(ppo, args, iteration):
                 league = [ppo.weights()]
+                ladder = pool_chooser(args, RUN_DIR)
             # Linearly decay the learning rate to 10% over the run.
             progress = (iteration - start_iteration - 1) / args.iterations
             ppo.set_lr(args.lr * (1.0 - 0.9 * progress))
@@ -743,30 +1039,16 @@ def main():
                 if p.suffix in (".npz", ".json") and ".tmp" not in p.name
             ]
 
+            champion = current_champion(pool) if args.champion_share else None
+
             tasks = []
             for _ in range(args.games):
                 roll = rng.random()
                 seed = int(rng.integers(2**31))
-                task_end = (seed, args.gamma, args.reward)
-                if roll < args.self_play:
-                    tasks.append((weights, "self", None, *task_end))
-                elif roll < args.self_play + args.snapshots:
-                    snap = league[rng.integers(len(league))]
-                    tasks.append((weights, "snapshot", snap, *task_end))
-                elif pool and roll < args.self_play + args.snapshots + args.pool_share:
-                    opp = "file:" + str(pool[rng.integers(len(pool))])
-                    tasks.append((weights, opp, None, *task_end))
-                elif not opponent_names:
-                    # No fixed opponents (a league that starts from zero): the league
-                    # pool if there is one yet, otherwise self-play.
-                    if pool:
-                        opp = "file:" + str(pool[rng.integers(len(pool))])
-                        tasks.append((weights, opp, None, *task_end))
-                    else:
-                        tasks.append((weights, "self", None, *task_end))
-                else:
-                    opp = str(rng.choice(opponent_names, p=opponent_p))
-                    tasks.append((weights, opp, None, *task_end))
+                opp, snap = choose_opponent(
+                    roll, rng, args, pool, league, opponent_names, opponent_p, ladder, champion
+                )
+                tasks.append((weights, opp, snap, seed, args.gamma, args.reward))
 
             outcomes = play_iteration_games(
                 workers, tasks, args.vector_games, args.vector_precision
@@ -789,6 +1071,18 @@ def main():
                     [(o, gf, ga) for o, gf, ga, _ in outcomes if o != "self"]
                 )
             )
+
+            if ladder or args.champion_share:
+                pool_games = [(opponent_label(o), gf, ga) for o, gf, ga, _ in outcomes if o.startswith("file:")]
+                log("     by opponent: " + results_line(pool_games))
+            if ladder:
+                for o, gf, ga, _ in outcomes:
+                    if o.startswith("file:"):
+                        ladder.add(Path(o.removeprefix("file:")).name, gf, ga)
+                ladder.save()
+                if iteration % args.snapshot_every == 0 and pool:
+                    label = "balance (goal difference per 1000 ticks" if args.balance else "ladder (expected score"
+                    log(f"     {label}, share of pool games): " + ladder.summary(pool))
 
             if iteration % args.snapshot_every == 0:
                 league.append(ppo.weights())

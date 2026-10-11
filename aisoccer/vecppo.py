@@ -10,6 +10,8 @@ goal rewards ``PPOBrain.goal`` adds), and ``finish`` writes that into each brain
 
 Every function here repeats the elementwise operations of its PPOBrain counterpart
 over a leading seat axis, so the results are bit-identical (tests/test_vecgame.py).
+Seats whose networks read obs v2 get PPOBrain's extra_features, with the tick count
+and score trend kept here per seat as each PPOBrain keeps them (tests/test_obs_v2.py).
 """
 
 import numpy as np
@@ -17,12 +19,18 @@ import numpy as np
 from aisoccer.brains.PPOBrain import (
     CONTROL_SCALE,
     OBS_DIM,
+    RAW_DIM,
     REL_SCALE,
     ROLES,
     TEAMMATES,
     TYPICAL_SPREAD,
     H,
     L,
+    ScoreTrend,
+    batch_chance,
+    batch_raw_features,
+    extra_features,
+    time_left,
 )
 from aisoccer.constants import Constants
 
@@ -119,12 +127,17 @@ def batch_potential_terms(my_pos, opp_pos, ball_pos, ball_vel):
 
 
 def batch_log_prob(actions, mean, log_std):
-    """``gaussian_log_prob`` with one log_std row per seat: (K, 5, 2) actions give (K, 5)."""
-    std = np.exp(log_std)[:, None, :]
+    """
+    ``gaussian_log_prob`` with one log_std row per seat (K, 2), or per seat and player
+    (K, 5, 2): (K, 5, 2) actions give (K, 5).
+    """
+    if log_std.ndim == 2:
+        log_std = log_std[:, None, :]
+    std = np.exp(log_std)
     z = (actions - mean) / std
     return (
         -0.5 * (z * z).sum(axis=-1)
-        - log_std.sum(axis=-1)[:, None]
+        - log_std.sum(axis=-1)
         - 0.5 * log_std.shape[-1] * LOG_2PI
     )
 
@@ -182,7 +195,20 @@ class BatchedPPO:
         self.actions = np.array([b.action for b in brains], dtype=float).reshape(
             k, NUM, 2
         )
-        self.log_std = np.array([b.log_std for b in brains], dtype=float)
+        # (K, 5, 2): a brain's log_std is one row for the team or one per player role.
+        self.log_std = np.array(
+            [np.broadcast_to(np.asarray(b.log_std, dtype=float), (NUM, 2)) for b in brains]
+        )
+        # Observation width: the widest any seat's networks read (obs v2 adds columns
+        # after the v1 ones, so narrower networks read the leading columns).
+        self.obs_dims = [getattr(b, "obs_dim", OBS_DIM) for b in brains]
+        self.width = max(self.obs_dims, default=OBS_DIM)
+        self.tick = 0  # ticks played, as each PPOBrain's ObsMemory counts them
+        # Obs v3 (raw) is not a superset of v1, so it cannot share a batch with other versions.
+        self.raw = RAW_DIM in self.obs_dims
+        if self.raw and any(d != RAW_DIM for d in self.obs_dims):
+            raise ValueError("obs v3 (raw) networks cannot play in a batch with other observation versions")
+        self.trend = ScoreTrend(k) if self.width > OBS_DIM else None
         self.sampling = np.array([not b.deterministic for b in brains])
         self.training = np.array([b.training for b in brains])
         self.log: list[tuple] = []  # every training decision, flushed by finish()
@@ -193,6 +219,12 @@ class BatchedPPO:
             name: np.array([b.reward.get(name, 0.0) for b in brains], dtype=float)
             for name in TERMS
         }
+        # The "chance" term (PPOBrain.chance_potential), which shaping_potential adds
+        # after the TERMS for brains whose reward has a "chance" weight.
+        self.chance_weight = np.array(
+            [b.reward.get("chance", 0.0) for b in brains], dtype=float
+        )
+        self.xg_models = [b.reward.get("xg_model") for b in brains]
 
         # Seats grouped by the network(s) that pick their actions, and training seats by
         # their value network.
@@ -202,12 +234,15 @@ class BatchedPPO:
             key = tuple(_net_key(net) for net in nets)
             policy_groups.setdefault(key, (nets, []))[1].append(i)
             if b.training:
-                value_groups.setdefault(_net_key(b.value), (b.value, []))[1].append(i)
+                role_values = getattr(b, "role_values", None)
+                nets = tuple(role_values) if role_values else (b.value,)
+                key = tuple(_net_key(net) for net in nets)
+                value_groups.setdefault(key, (nets, []))[1].append(i)
         self.policy_groups = [
             (nets, np.array(seats)) for nets, seats in policy_groups.values()
         ]
         self.value_groups = [
-            (net, np.array(seats)) for net, seats in value_groups.values()
+            (nets, np.array(seats)) for nets, seats in value_groups.values()
         ]
 
     def act(self, views, game_time):
@@ -221,6 +256,7 @@ class BatchedPPO:
             self.decide(seats, *views(seats), game_time)
             self.until_decision[due] = self.repeat[due]
         self.until_decision -= 1
+        self.tick += 1
         return self.actions.copy()
 
     def decide(
@@ -237,7 +273,8 @@ class BatchedPPO:
         game_time,
     ):
         """PPOBrain.decide for the given seats (indices), whose views are passed row by row."""
-        obs = batch_player_features(
+        features = batch_raw_features if self.raw else batch_player_features
+        obs = features(
             my_pos,
             my_vel,
             opp_pos,
@@ -248,6 +285,24 @@ class BatchedPPO:
             opp_score,
             game_time,
         )
+        if self.trend is not None:  # obs v2 (PPOBrain.observation)
+            n = len(seats)
+            extra = extra_features(
+                my_pos,
+                my_vel,
+                opp_pos,
+                opp_vel,
+                ball_pos,
+                ball_vel,
+                time_left(
+                    np.full(n, self.tick),
+                    np.broadcast_to(np.asarray(game_time, dtype=float), (n,)),
+                ),
+                self.trend.update(
+                    seats, self.tick, np.asarray(my_score) - np.asarray(opp_score)
+                ),
+            )
+            obs = np.concatenate([obs, extra], axis=-1)
         row = np.full(len(self.brains), -1)
         row[seats] = np.arange(len(seats))
 
@@ -267,11 +322,11 @@ class BatchedPPO:
         sampling = np.flatnonzero(self.sampling[seats])
         if len(sampling):
             noise = np.stack(
-                [self.brains[seats[i]].rng.standard_normal((NUM, 2)) for i in sampling]
+                [self.brains[seats[i]].exploration_noise((NUM, 2)) for i in sampling]
             )
             action[sampling] = (
                 mean[sampling]
-                + np.exp(self.log_std[seats[sampling]])[:, None, :] * noise
+                + np.exp(self.log_std[seats[sampling]]) * noise
             )
         self.actions[seats] = action
 
@@ -279,11 +334,16 @@ class BatchedPPO:
         if not len(learning):
             return
         values = np.empty((len(seats), NUM))
-        for net, members in self.value_groups:
+        for nets, members in self.value_groups:
             rows = row[members]
             rows = rows[rows >= 0]
-            if len(rows):
-                values[rows] = self.forward(net, obs[rows])[:, :, 0]
+            if not len(rows):
+                continue
+            if len(nets) == 1:
+                values[rows] = self.forward(nets[0], obs[rows])[:, :, 0]
+            else:  # one value network per player role (train_roles.py)
+                for r, net in enumerate(nets):
+                    values[rows, r] = self.forward(net, obs[rows, r][:, None])[:, 0, 0]
         log_std = self.log_std[seats[learning]]
         logp = batch_log_prob(action[learning], mean[learning], log_std)
         terms = batch_potential_terms(
@@ -293,12 +353,51 @@ class BatchedPPO:
         for name in TERMS:  # summed in shaping_potential's order
             phi = phi + self.weights[name][seats[learning]] * terms[name]
         who = seats[learning]
+        if self.chance_weight[who].any():  # as shaping_potential adds it
+            phi = np.where(
+                self.chance_weight[who] != 0,
+                phi
+                + self.chance(
+                    who,
+                    my_pos[learning],
+                    opp_pos[learning],
+                    ball_pos[learning],
+                    ball_vel[learning],
+                ),
+                phi,
+            )
         self.log.append(
             (who, obs[learning], action[learning], logp, values[learning], phi)
         )
         self.decisions[who] += 1
 
+    def chance(self, who, my_pos, opp_pos, ball_pos, ball_vel):
+        """
+        Each seat's (``who``, with its views row by row) weighted "chance" potential:
+        weight * PPOBrain.chance_potential with the seat's own xG model, 0 for seats
+        without a "chance" weight.
+        """
+        out = np.zeros(len(who))
+        weight = self.chance_weight[who]
+        rows = np.flatnonzero(weight)
+        models = {}  # seats sharing an xG model (usually all) are done together
+        for r in rows:
+            models.setdefault(id(self.xg_models[who[r]]), []).append(r)
+        for group in models.values():
+            group = np.array(group)
+            out[group] = weight[group] * batch_chance(
+                my_pos[group],
+                opp_pos[group],
+                ball_pos[group],
+                ball_vel[group],
+                self.xg_models[who[group[0]]],
+            )
+        return out
+
     def forward(self, net, x):
+        width = net.params[0].shape[0]
+        if x.shape[-1] != width:  # an older observation version: its leading columns
+            x = np.ascontiguousarray(x[..., :width])
         params = self._params.get(_net_key(net))
         if params is None:
             dtype = np.float32 if self.precision == "float32" else float
@@ -334,6 +433,8 @@ class BatchedPPO:
                     goal[step] += reward
             t = self.brains[i].trajectory
             for name, column in zip(("obs", "act", "logp", "val", "phi"), columns):
+                if name == "obs" and column.shape[-1] != self.obs_dims[i]:
+                    column = column[..., : self.obs_dims[i]]  # its own observation width
                 t[name].extend(column[rows])
             t["goal"].extend(goal)
         self.log = []

@@ -22,6 +22,7 @@ from pyglet.math import Mat4, Vec3
 
 from aisoccer.constants import Constants
 from aisoccer.graphics.field import Field
+from aisoccer.graphics.pace import display_pace
 
 L, H = Constants.FIELD_LENGTH, Constants.FIELD_HEIGHT
 HEADER = 110
@@ -99,26 +100,34 @@ class Renderer:
         return bytes(self.pixels)
 
 
-def render(replay_path, out_path, renderer, league="League 2", ticks_per_frame=2, fps=50, width=1280):
+def render(replay_path, out_path, renderer, league="League 2", width=1280):
     data = np.load(replay_path, allow_pickle=True)
+    # Show the game at the original visual pace for the speed it was played at
+    # (replays from before SPEED_SCALE existed were played at speed 1).
+    speed_scale = float(data["speed_scale"]) if "speed_scale" in data.files else 1.0
+    ticks_per_frame, fps = display_pace(speed_scale)  # fps: an exact Fraction
+    ticks_per_second = fps * ticks_per_frame
     names = [str(n) for n in data["names"]]
     positions, scores = data["positions"], data["scores"]
-    round_number = int(data["round"])
-    title = f"{league} · round {round_number} · the top two of the round's Swiss"
+    round_number = int(data["round"]) if "round" in data.files else None
+    title = (
+        str(data["title"]) if "title" in data.files
+        else f"{league} · round {round_number} · the top two of the round's Swiss"
+    )
     cmd = [
         imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{renderer.width}x{renderer.height}",
-        "-r", str(fps), "-i", "-",
+        "-r", f"{fps.numerator}/{fps.denominator}", "-i", "-",
         "-vf", f"vflip,scale={width}:-2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20",
         str(out_path),
     ]
     ffmpeg = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     card = [
-        (f"{league} · Round {round_number}", 56, GOLD),
+        (str(data["card_title"]) if "card_title" in data.files else f"{league} · Round {round_number}", 56, GOLD),
         (f"{names[0]}  vs  {names[1]}", 40, WHITE),
-        ("every brain here started from random play", 22, GREY),
+        (str(data["card_note"]) if "card_note" in data.files else "every brain here started from random play", 22, GREY),
     ]
-    for _ in range(fps * 3):  # three-second title card
+    for _ in range(round(fps * 3)):  # three-second title card
         ffmpeg.stdin.write(renderer.frame(None, (0, 0), names, title, 0.0, card=card))
 
     flash, flash_until, previous = None, -1, (0, 0)
@@ -128,14 +137,14 @@ def render(replay_path, out_path, renderer, league="League 2", ticks_per_frame=2
         if score != previous:
             scorer = names[0] if score[0] > previous[0] else names[1]
             flash = (f"GOAL!  {scorer}", BLUE if score[0] > previous[0] else RED)
-            flash_until, previous = t + 80, score
+            flash_until, previous = t + round(ticks_per_second * 0.8), score  # 0.8 s
         ffmpeg.stdin.write(
             renderer.frame(positions[t], score, names, title, t / total, flash if t < flash_until else None)
         )
     final = tuple(int(v) for v in scores[-1])
     result = "draw" if final[0] == final[1] else f"{names[0] if final[0] > final[1] else names[1]} wins"
     end_card = [(f"Full time: {final[0]} – {final[1]}", 56, GOLD), (result, 40, WHITE)]
-    for _ in range(fps * 2):
+    for _ in range(round(fps * 2)):
         ffmpeg.stdin.write(renderer.frame(positions[-1], final, names, title, 1.0, card=end_card))
     ffmpeg.stdin.close()
     ffmpeg.wait()

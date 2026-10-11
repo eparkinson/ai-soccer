@@ -18,13 +18,14 @@ class Team:
             self.players.append(Player(side, starting_position))
 
     def apply_move(self, move: np.ndarray) -> np.ndarray:
-        """Apply a 5 x 2 acceleration matrix and return the (magnitude-capped) accelerations used."""
+        """Apply a 5 x 2 acceleration matrix and return the accelerations used (each capped at magnitude MAX_ACCELERATION)."""
         # Guard the physics against brains that return NaN/inf.
         move = np.asarray(move, dtype=float)
         if not np.isfinite(move).all():  # only scrub when needed: same result, much faster
             move = np.nan_to_num(move, nan=0.0, posinf=0.0, neginf=0.0)
+        cap = Constants.MAX_ACCELERATION
         norms = np.linalg.norm(move, axis=1, keepdims=True)
-        normal_move = np.where(norms > 1, move / np.maximum(norms, 1), move)
+        normal_move = np.where(norms > cap, move / np.maximum(norms, cap) * cap, move)
         rows = self.rows()
         if rows is not None:  # all players in one physics state: one array update
             state = self.players[0].body._state
@@ -74,8 +75,9 @@ class Player:
 
     def apply_move(self, move: np.ndarray):
         norm = np.linalg.norm(move)
-        if norm > 1:
-            normal_move = move / norm
+        cap = Constants.MAX_ACCELERATION
+        if norm > cap:
+            normal_move = move / norm * cap
         else:
             normal_move = move
 

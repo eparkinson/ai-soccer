@@ -15,6 +15,12 @@ How the ball moves (aisoccer/physics.py):
   KICK_FACTOR * ((v_player - v_ball) . n) n, where n is the unit vector from the
   player's centre to the ball's. So the kick direction is set by where the player
   strikes the ball, and the power by how fast it is moving along that line.
+
+Speed: these run every tick for several players, so the hot ones use plain floats for
+scalar arithmetic and work on all players at once where they can. Such changes must
+give bit-identical results (a version never changes how it plays): element-wise numpy
+arithmetic and Python floats are the same IEEE operations, but a matrix product's
+rounding can depend on the shape of its arguments, so those are kept as they were.
 """
 
 import math
@@ -42,9 +48,19 @@ _ball_mass = BALL_R**2
 KICK_FACTOR = 2 * _player_mass / (_player_mass + _ball_mass)  # about 1.8
 
 
+def length(dx, dy):
+    """Length of the vector (dx, dy) in plain floats: np.linalg.norm's result, bit for bit."""
+    return math.sqrt(dx * dx + dy * dy)
+
+
 def unit(v):
-    n = np.linalg.norm(v)
+    n = length(*np.asarray(v, dtype=float).tolist())
     return v / n if n > 1e-9 else np.zeros(2)
+
+
+def norms(v):
+    """Lengths of the 2-vectors along v's last axis: np.linalg.norm(v, axis=-1), bit for bit."""
+    return np.sqrt(v[..., 0] * v[..., 0] + v[..., 1] * v[..., 1])
 
 
 # ---------------------------------------------------------------- prediction
@@ -55,19 +71,23 @@ def predict_ball(pos, vel, ticks):
     Ball positions for the next `ticks` ticks (row t = after t+1 ticks), bouncing off
     the side walls and the goal lines outside the goal mouths. Players are ignored.
     """
-    p = np.array(pos, dtype=float)
-    v = np.array(vel, dtype=float)
-    out = np.empty((ticks, 2))
+    # Plain floats: the same arithmetic as 2-vectors, without numpy's per-call cost.
+    x, y = np.asarray(pos, dtype=float).tolist()
+    vx, vy = np.asarray(vel, dtype=float).tolist()
+    xs, ys = [0.0] * ticks, [0.0] * ticks
     for t in range(ticks):
-        in_mouth = GOAL_Y_MIN < p[1] < GOAL_Y_MAX
+        in_mouth = GOAL_Y_MIN < y < GOAL_Y_MAX
         min_x = (0.0 if in_mouth else OWN_GOAL_LINE) + BALL_R
         max_x = (L if in_mouth else GOAL_LINE) - BALL_R
-        if (p[0] < min_x and v[0] < 0) or (p[0] > max_x and v[0] > 0):
-            v[0] = -v[0]
-        if (p[1] < BALL_R and v[1] < 0) or (p[1] > H - BALL_R and v[1] > 0):
-            v[1] = -v[1]
-        p = p + v
-        out[t] = p
+        if (x < min_x and vx < 0) or (x > max_x and vx > 0):
+            vx = -vx
+        if (y < BALL_R and vy < 0) or (y > H - BALL_R and vy > 0):
+            vy = -vy
+        x += vx
+        y += vy
+        xs[t], ys[t] = x, y
+    out = np.empty((ticks, 2))
+    out[:, 0], out[:, 1] = xs, ys
     return out
 
 
@@ -91,11 +111,24 @@ def time_to_reach(pos, vel, target):
 
 def times_to_reach(pos, vel, targets):
     """Vectorised time_to_reach for many targets (an N x 2 array)."""
-    offset = np.asarray(targets, dtype=float) - pos
-    d = np.linalg.norm(offset, axis=1)
-    direction = offset / np.maximum(d, 1e-9)[:, None]
-    v0 = direction @ vel
-    sideways = np.linalg.norm(vel[None, :] - v0[:, None] * direction, axis=1)
+    pos = np.asarray(pos, dtype=float)
+    targets = np.asarray(targets, dtype=float)
+    return _times_to_reach(pos[None], [np.asarray(vel, dtype=float)], targets[None])[0]
+
+
+def _times_to_reach(positions, velocities, targets):
+    """
+    times_to_reach for several players at once: row k of `positions` (P x 2) and
+    velocities[k] (a list of P 2-vectors) with the targets targets[k] (P x N x 2).
+    """
+    offset = targets - positions[:, None, :]
+    d = norms(offset)
+    direction = offset / np.maximum(d, 1e-9)[..., None]
+    # One matrix-vector product per player, as for a single player: its rounding can
+    # depend on the arrays' shapes, so a single product for everyone could differ.
+    # (Everything else is element-wise, so the same whether done at once or apart.)
+    v0 = np.array([direction[k] @ vel for k, vel in enumerate(velocities)])
+    sideways = norms(np.asarray(velocities)[:, None, :] - v0[..., None] * direction)
     t_full = np.maximum(MAX_SPEED - v0, 0.0)
     d_full = (v0 + MAX_SPEED) / 2 * t_full
     accelerating = -v0 + np.sqrt(np.maximum(v0 * v0 + 2 * d, 0.0))
@@ -108,17 +141,24 @@ def intercept(pos, vel, ball_path, margin=0.0):
     Earliest tick (index into ball_path) at which the player can be touching the
     ball, and the ball's position then. Falls back to the end of the path.
     """
-    pos = np.asarray(pos, dtype=float)
-    offsets = ball_path - pos
-    dist = np.linalg.norm(offsets, axis=1)
-    reach_points = ball_path - offsets / np.maximum(dist, 1e-9)[:, None] * (
+    t = intercepts([pos], [vel], ball_path, margin)[0]
+    return t, ball_path[t]
+
+
+def intercepts(positions, velocities, ball_path, margin=0.0):
+    """intercept's tick for several players at once (row k of positions and velocities)."""
+    positions = np.asarray(positions, dtype=float)
+    velocities = [np.asarray(vel, dtype=float) for vel in velocities]
+    offsets = ball_path - positions[:, None, :]
+    dist = norms(offsets)
+    reach_points = ball_path - offsets / np.maximum(dist, 1e-9)[..., None] * (
         CONTACT + margin
     )
-    ok = times_to_reach(pos, np.asarray(vel, dtype=float), reach_points) <= np.arange(
+    ok = _times_to_reach(positions, velocities, reach_points) <= np.arange(
         1, len(ball_path) + 1
     )
-    t = int(np.argmax(ok)) if ok.any() else len(ball_path) - 1
-    return t, ball_path[t]
+    first, found = np.argmax(ok, axis=1).tolist(), ok.any(axis=1).tolist()
+    return [t if f else len(ball_path) - 1 for t, f in zip(first, found)]
 
 
 # ---------------------------------------------------------------- movement
@@ -130,7 +170,7 @@ def move_to(pos, vel, target, arrive_speed=0.0):
     instead of overshooting (with acceleration 1, speed sqrt(2d) stops in d).
     """
     offset = np.asarray(target, dtype=float) - pos
-    d = np.linalg.norm(offset)
+    d = length(*offset.tolist())
     if d < 1.0:
         return -vel  # stop
     speed = min(MAX_SPEED, math.sqrt(2 * d + arrive_speed**2))
@@ -145,7 +185,7 @@ def run_through(pos, vel, direction, speed=MAX_SPEED):
 # ---------------------------------------------------------------- ball skills
 
 
-def kick(pos, vel, ball, ball_vel, direction, power=1.0, ball_path=None):
+def kick(pos, vel, ball, ball_vel, direction, power=1.0, ball_path=None, ball_then=None):
     """
     Send the ball in `direction` at up to `power` x full strength.
 
@@ -154,11 +194,14 @@ def kick(pos, vel, ball, ball_vel, direction, power=1.0, ball_path=None):
     about 60 degrees of the kick direction) the player drives straight through the
     contact point; a small angle only bends the kick a little. From the wrong side it
     runs round the ball first. The approach speed sets the kick's strength.
+
+    `ball_then`, if known, is where the player meets the ball (intercept's position).
     """
     d = unit(direction)
-    if ball_path is None:
-        ball_path = predict_ball(ball, ball_vel, 60)
-    _, ball_then = intercept(pos, vel, ball_path)
+    if ball_then is None:
+        if ball_path is None:
+            ball_path = predict_ball(ball, ball_vel, 60)
+        _, ball_then = intercept(pos, vel, ball_path)
     ball_then = np.asarray(ball_then)
     contact = ball_then - d * CONTACT
     speed = float(
@@ -182,11 +225,15 @@ def kick(pos, vel, ball, ball_vel, direction, power=1.0, ball_path=None):
     return move_to(pos, vel, waypoint, arrive_speed=4.0)
 
 
-def tackle(pos, vel, ball, ball_vel, ball_path=None):
-    """Win a contested ball: run straight at it and knock it towards the opponent's goal."""
-    if ball_path is None:
-        ball_path = predict_ball(ball, ball_vel, 60)
-    _, ball_then = intercept(pos, vel, ball_path)
+def tackle(pos, vel, ball, ball_vel, ball_path=None, ball_then=None):
+    """
+    Win a contested ball: run straight at it and knock it towards the opponent's goal.
+    `ball_then`, if known, is where the player meets the ball (intercept's position).
+    """
+    if ball_then is None:
+        if ball_path is None:
+            ball_path = predict_ball(ball, ball_vel, 60)
+        _, ball_then = intercept(pos, vel, ball_path)
     away = unit(np.asarray(ball_then) - OWN_GOAL_CENTRE)
     return move_to(
         pos, vel, np.asarray(ball_then) - away * (CONTACT - 6), arrive_speed=MAX_SPEED
@@ -208,8 +255,8 @@ def open_goal_y(ball, opponents=None, samples=9):
     if opponents is None or len(opponents) == 0:
         return float(np.clip(ball[1], ys[0], ys[-1]))
     best, best_clear = ys[samples // 2], -1.0
-    for y in ys:
-        clear = lane_clearance(ball, np.array([GOAL_LINE, y]), opponents)
+    ends = np.column_stack([np.full(samples, float(GOAL_LINE)), ys])
+    for y, clear in zip(ys, lane_clearances(ball, ends, opponents)):
         if clear > best_clear:
             best, best_clear = y, clear
     return float(best)
@@ -219,10 +266,23 @@ def lane_clearance(start, end, others):
     """Smallest distance from any of `others` to the segment start -> end."""
     seg = end - start
     length_sq = float(np.dot(seg, seg)) or 1.0
-    rel = np.asarray(others) - start
+    others = np.asarray(others)
+    rel = others - start
     t = np.clip(rel @ seg / length_sq, 0.0, 1.0)
     closest = start + t[:, None] * seg
-    return float(np.min(np.linalg.norm(np.asarray(others) - closest, axis=1)))
+    return float(norms(others - closest).min())
+
+
+def lane_clearances(start, ends, others):
+    """lane_clearance for several segments at once: from start to each row of `ends`."""
+    segs = ends - start
+    length_sq = np.array([float(np.dot(seg, seg)) or 1.0 for seg in segs])
+    others = np.asarray(others)
+    rel = others - start
+    # One matrix-vector product per segment, as for a single one (see _times_to_reach).
+    t = np.clip(np.array([rel @ seg for seg in segs]) / length_sq[:, None], 0.0, 1.0)
+    closest = start + t[:, :, None] * segs[:, None, :]
+    return norms(others - closest).min(axis=1).tolist()
 
 
 # ---------------------------------------------------------------- positional skills
@@ -240,15 +300,20 @@ def block_lane(pos, vel, ball, fraction=0.3):
     return move_to(pos, vel, point)
 
 
-def keep_goal(pos, vel, ball, ball_vel, depth=0.0):
+def keep_goal(pos, vel, ball, ball_vel, depth=0.0, ball_path=None):
     """
     Goalkeeper: stay on (or `depth` px in front of) our goal line, at the height the
     ball will cross it, or covering the ball's angle when it is not coming our way.
+    `ball_path`, if known, is predict_ball(ball, ball_vel, ...): its first ticks are
+    used instead of predicting them again.
     """
     x = OWN_GOAL_LINE + PLAYER_R + depth
     if ball_vel[0] < -0.5:
         t = (ball[0] - x) / -ball_vel[0]
-        y = predict_ball(ball, ball_vel, int(min(max(t, 1), 200)))[-1][1]
+        ticks = int(min(max(t, 1), 200))
+        if ball_path is None or len(ball_path) < ticks:
+            ball_path = predict_ball(ball, ball_vel, ticks)
+        y = ball_path[ticks - 1][1]
     else:
         y = H / 2 + (ball[1] - H / 2) * 0.5
     y = float(np.clip(y, GOAL_Y_MIN + PLAYER_R * 0.5, GOAL_Y_MAX - PLAYER_R * 0.5))

@@ -21,7 +21,7 @@ from render_replay import Renderer, render
 START, END = "<!-- AUTO:ROUNDS START -->", "<!-- AUTO:ROUNDS END -->"
 # Rounds left out of the blog: in rounds 3-4 hand-structured brains were admitted too
 # early by mistake (see progress.log). The blog tells the story of the league as intended.
-HIDDEN = {3, 4}
+HIDDEN = {3, 4} if "league2" in str(lf.LEAGUE_DIR) else set()
 BRIDGE = {3: "### Rounds 3–4\n\nThe learners keep training; PPO-champ-0 stays champion.\n"}
 
 
@@ -79,7 +79,8 @@ def round_section(round_, replay, video, blog_dir):
     elif round_ is not None and round_["swiss"]:
         top = ", ".join(f"{r['rank']}. {r['name']} ({r['pts']:.2f} pts/game)" for r in round_["swiss"][:5])
         lines += [f"Top of the Swiss: {top}.", ""]
-        events = [n for n in round_["notes"] if re.match(r"(NEW CHAMPION|PROMOTED|ON COURSE|PENDING|REPLACED|RETIRED|ADMITTED)", n)]
+        pattern = r"(NEW CHAMPION|PROMOTED|TITLE RACE|ON COURSE|PENDING|REPLACED|RETIRED|ADMITTED)"
+        events = [n for n in round_["notes"] if re.match(pattern, n)]
         for event in events:
             lines.append(f"- {event}")
         if events:
@@ -95,10 +96,18 @@ FAMILIES = [  # (family, name prefix); the first match wins
     ("PPO", "PPO-"),
     ("Evolution strategies", "Neuro-ES"),
     ("Genetic algorithm on networks", "GA-net"),
-    ("Tactics GA (hand-structured)", "Tactics"),
     ("Genetic algorithm on a readable brain (hand-structured)", "GA"),
     ("LLMBrain (written by Claude)", "LLM-"),
 ]
+
+
+def hidden_brains():
+    """Brains retired with hide_in_blog (e.g. dropped before they ever joined the league)."""
+    import json
+
+    roster = lf.LEAGUE_DIR / "roster.json"
+    retired = json.loads(roster.read_text()).get("retired", {}) if roster.exists() else {}
+    return {name for name, entry in retired.items() if entry.get("hide_in_blog")}
 
 
 def family(name):
@@ -107,8 +116,11 @@ def family(name):
 
 def family_table(data):
     """Each method's best brain this round beside the method's total compute so far."""
+    hidden = hidden_brains()
     raw = {  # branches not double counted; champions are snapshots of a counted line
-        n: h for n, h in lf.compute_usd(data, lineage=False).items() if not n.startswith("PPO-champ-")
+        n: h
+        for n, h in lf.compute_usd(data, lineage=False).items()
+        if not n.startswith("PPO-champ-") and n not in hidden
     }
     strength = {**data.get("qualifying", {}), **data.get("h2h", {})}
     swiss = {r["name"]: r for r in data["standings"]}
@@ -150,7 +162,10 @@ def compute_section():
     swiss = {r["name"]: r for r in data["standings"]}
     strength = {**data.get("qualifying", {}), **data.get("h2h", {})}
     rows = []
+    hidden = hidden_brains()
     for name, hours in sorted(lf.compute_usd(data).items(), key=lambda kv: -kv[1]):
+        if name in hidden:
+            continue
         vs = strength.get(name)
         pts = swiss.get(name, {}).get("points")
         rows.append(
