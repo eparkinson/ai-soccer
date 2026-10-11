@@ -33,6 +33,8 @@ class Tournament:
         self.processes = processes or os.cpu_count() or 1
         self.seed_sequence = np.random.SeedSequence(seed)
         self.tournament_scores = TournamentScores(self.brains)
+        # Every game played, as (blue brain number, red brain number, blue goals, red goals)
+        self.results: list[tuple[int, int, int, int]] = []
 
     def start(self):
         print("Starting tournament")
@@ -120,6 +122,7 @@ class Tournament:
                 results = pool.map(self.play, fixtures)
         for (blue, red, _), score in zip(fixtures, results):
             self.tournament_scores.process((blue, red), score)
+            self.results.append((blue, red, *score))
 
     def fixtures(self, pairings):
         """Expand pairings into (blue, red, seed) games, alternating sides each leg."""

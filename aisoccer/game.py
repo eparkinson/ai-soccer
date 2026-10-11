@@ -47,6 +47,7 @@ class Game:
         self.record_game = record_game
         self.score = {"red": 0, "blue": 0}
         self.last_goal_tick = 0  # Track the tick count of the last goal
+        self._speed_caps = None  # per body in the physics state, for limit_velocities
 
         self.seed_brains()
 
@@ -77,7 +78,8 @@ class Game:
             self.state.add_body(post)
 
         self.state.add_body(self.ball.body)
-        self.ball.body.velocity = self.rng.random(2) - 0.5
+        # A small random nudge to the ball, as fast as the rest of the game.
+        self.ball.body.velocity = (self.rng.random(2) - 0.5) * Constants.SPEED_SCALE
 
     def tick(self):
         if self.game_length != 0 and self.state.ticks >= self.game_length:
@@ -93,7 +95,10 @@ class Game:
         else:
             self.run_brains()
             self.limit_velocities()
-            self.state.tick()
+            substeps = Constants.SUBSTEPS
+            # Stop the tick's sub-steps as soon as the ball is in a goal (scored at the
+            # start of the next tick), so it cannot bounce back out within the tick.
+            self.state.tick(substeps, self.ball_in_goal if substeps > 1 else None)
             return GameResult.nothing
 
     def goal(self, scoring_team):
@@ -124,6 +129,9 @@ class Game:
         x, y = self.ball.body.position
         goal_line = Constants.FIELD_LENGTH - 1 - Constants.GOAL_DEPTH
         return x > goal_line + Constants.BALL_RADIUS and self.in_goal_mouth(y)
+
+    def ball_in_goal(self):
+        return self.is_red_goal() or self.is_blue_goal()
 
     @staticmethod
     def in_goal_mouth(y):
@@ -184,10 +192,24 @@ class Game:
             self.record_move("red", *red_view, flip_acc(red_move))
 
     def limit_velocities(self):
-        clamp_speed(self.ball.body, Constants.MAX_BALL_VELOCITY)
-        for t in self.teams:
-            for p in t.players:
-                clamp_speed(p.body, Constants.MAX_PLAYER_VELOCITY)
+        state = self.state
+        if self.ball.body._state is not state:  # bodies not in the state: one at a time
+            clamp_speed(self.ball.body, Constants.MAX_BALL_VELOCITY)
+            for t in self.teams:
+                for p in t.players:
+                    clamp_speed(p.body, Constants.MAX_PLAYER_VELOCITY)
+            return
+        if self._speed_caps is None or len(self._speed_caps) != len(state.bodies):
+            caps = np.full(len(state.bodies), np.inf)
+            for t in self.teams:
+                for p in t.players:
+                    caps[p.body._index] = Constants.MAX_PLAYER_VELOCITY
+            caps[self.ball.body._index] = Constants.MAX_BALL_VELOCITY
+            self._speed_caps = caps
+        speed = np.hypot(state.vel[:, 0], state.vel[:, 1])
+        too_fast = speed > self._speed_caps
+        if too_fast.any():
+            state.vel[too_fast] *= (self._speed_caps[too_fast] / speed[too_fast])[:, None]
 
     def play(self):
         while True:

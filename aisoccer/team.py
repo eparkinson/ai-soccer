@@ -18,16 +18,35 @@ class Team:
             self.players.append(Player(side, starting_position))
 
     def apply_move(self, move: np.ndarray) -> np.ndarray:
-        """Apply a 5 x 2 acceleration matrix and return the (magnitude-capped) accelerations used."""
+        """Apply a 5 x 2 acceleration matrix and return the accelerations used (each capped at magnitude MAX_ACCELERATION)."""
         # Guard the physics against brains that return NaN/inf.
-        move = np.nan_to_num(
-            np.asarray(move, dtype=float), nan=0.0, posinf=0.0, neginf=0.0
-        )
+        move = np.asarray(move, dtype=float)
+        if not np.isfinite(move).all():  # only scrub when needed: same result, much faster
+            move = np.nan_to_num(move, nan=0.0, posinf=0.0, neginf=0.0)
+        cap = Constants.MAX_ACCELERATION
         norms = np.linalg.norm(move, axis=1, keepdims=True)
-        normal_move = np.where(norms > 1, move / np.maximum(norms, 1), move)
-        for i, player in enumerate(self.players):
-            player.body.apply_acceleration(normal_move[i])
+        normal_move = np.where(norms > cap, move / np.maximum(norms, cap) * cap, move)
+        rows = self.rows()
+        if rows is not None:  # all players in one physics state: one array update
+            state = self.players[0].body._state
+            state.vel[rows] = state.vel[rows] + normal_move
+        else:
+            for i, player in enumerate(self.players):
+                player.body.apply_acceleration(normal_move[i])
         return normal_move
+
+    def rows(self):
+        """The players' rows in their physics state's arrays, or None if not all in one."""
+        first = self.players[0].body
+        cached = getattr(self, "_rows", None)
+        if cached is not None and first._state is cached[0] and first._index == cached[1][0]:
+            return cached[1]
+        state = first._state
+        if state is None or any(p.body._state is not state for p in self.players):
+            return None
+        rows = np.array([p.body._index for p in self.players])
+        self._rows = (state, rows)
+        return rows
 
     def reset(self):
         for i, player in enumerate(self.players):
@@ -37,9 +56,15 @@ class Team:
             player.body.velocity = np.array([0.0, 0.0])
 
     def position_matrix(self):
+        rows = self.rows()
+        if rows is not None:
+            return self.players[0].body._state.pos[rows]  # fancy indexing: a copy
         return np.array([p.body.position for p in self.players], dtype=float)
 
     def velocity_matrix(self):
+        rows = self.rows()
+        if rows is not None:
+            return self.players[0].body._state.vel[rows]
         return np.array([p.body.velocity for p in self.players], dtype=float)
 
 
@@ -50,8 +75,9 @@ class Player:
 
     def apply_move(self, move: np.ndarray):
         norm = np.linalg.norm(move)
-        if norm > 1:
-            normal_move = move / norm
+        cap = Constants.MAX_ACCELERATION
+        if norm > cap:
+            normal_move = move / norm * cap
         else:
             normal_move = move
 

@@ -134,3 +134,8 @@ dmypy.json
 
 # Ignore copilot instructions
 copilot_instructions.md
+runs/
+videos/
+
+# League analysis data and scratch work: large, kept locally only
+analysis/

@@ -21,6 +21,10 @@ mypy = "^1.17.1"
 black = "^24.0.0"
 flake8 = "^7.0.0"
 
+
+[tool.poetry.group.video.dependencies]
+imageio-ffmpeg = "^0.6.0"
+
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
